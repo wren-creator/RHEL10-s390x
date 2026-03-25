@@ -18,8 +18,11 @@ Components included:
 
 ```bash
 podman build -t rhel10-bootc-s390x:latest .
-
+```
+## Create Bootable Disk
+```bash
 bootc-image-builder \
   --image rhel10-bootc-s390x:latest \
   --target s390x \
   --output /var/tmp/rhel10-bootc-s390x.raw
+```
