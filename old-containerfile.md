@@ -1,3 +1,4 @@
+```
 FROM registry.redhat.io/rhel10/rhel-bootc
 
 # Install baseline packages (includes s390x tools)
@@ -22,3 +23,4 @@ RUN useradd -m -G wheel ts00zu && echo 'ts00zu:changeme' | chpasswd
 
 # Harden SSH
 RUN sed -i 's/^#\?PasswordAuthentication .*/PasswordAuthentication no/' /etc/ssh/sshd_config
+```
