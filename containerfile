@@ -42,10 +42,21 @@ RUN chmod 700 /home/test/.ssh \
 RUN sed -i 's/^SELINUX=enforcing/SELINUX=permissive/' /etc/selinux/config
 
 # Copy required bootc runtime configs
+# Add dracut drivers
 COPY dracut/10-s390x.conf /etc/dracut.conf.d/
 COPY fstab /etc/fstab
 COPY network/qeth0.nmconnection /etc/NetworkManager/system-connections/qeth0.nmconnection
+# Add DASD persistent config
 COPY dasd.conf /etc/dasd.conf
+
+# Add first-boot LVM/DASD automation
+COPY firstboot-lvm.sh /usr/local/sbin/
+COPY firstboot-lvm.service /etc/systemd/system/
+RUN chmod +x /usr/local/sbin/firstboot-lvm.sh
+RUN systemctl enable firstboot-lvm.service
+
+# Rebuild initramfs to include DASD drivers + config
+RUN dracut -f
 
 # Relabel SELinux after changes
 RUN fixfiles -F relabel
