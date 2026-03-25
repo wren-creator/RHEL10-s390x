@@ -1,7 +1,7 @@
 # RHEL 10 bootc for s390x – Full Build, Deploy & Operations Guide
 
 ## Table of Contents
-1. Overview
+1. [Overview](Overview)
 2. Assumptions & Requirements
 3. Architecture Summary
 4. Base Image Acquisition
