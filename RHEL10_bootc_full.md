@@ -2,20 +2,20 @@
 
 ## Table of Contents
 1. [Overview](#Overview)
-2. [Assumptions & Requirements](#Assumptions-&-Requirements)
+2. [Assumptions & Requirements](#assumptions--requirements)
 3. [Architecture Summary](#Architecture-Summary)
-4. [Base Image Acquisition](#Base-Image-Acquisition)
-5. [Creating the Containerfile](#CreatingtheContainerfile)
-6. [Building the bootc Image](#BuildingthebootcImage)
-7. [Testing the Container Image](#TestingtheContainerImage)
-8. [Building s390x Bootable Disk Images](#Buildings390xBootableDiskImages)
-9. [Deploying to IBM Z (LPAR or KVM)](#DeployingtoIBMZ(LPARorKVM))
-10. [LPAR DASD/FCP Boot Requirements](#LPARDASD/FCPBootRequirements)
-11. [First Boot Validation](#FirstBootValidation)
-12. [Atomic Updates & Rollbacks](#AtomicUpdates&Rollbacks)
-13. [Troubleshooting & Known Fixes](#Troubleshooting&KnownFixes)
+4. [Base Image Acquisition](#base-image-acquisition)
+5. [Creating the Containerfile](#creating-the-containerfile)
+6. [Building the bootc Image](#building-the-bootc-image)
+7. [Testing the Container Image](#testing-the-container)
+8. [Building s390x Bootable Disk Images](#building-s390x-bootable-disk-images)
+9. [Deploying to IBM Z (LPAR or KVM)](#deploying-to-ibm-z-lpar-or-kvm)
+10. [LPAR DASD/FCP Boot Requirements](#lpar-dasdfcp-boot-requirements)
+11. [First Boot Validation](#first-boot-validation)
+12. [Atomic Updates & Rollbacks](#atomic-updates--rollbacks)
+13. [Troubleshooting & Known Fixes](#troubleshooting--fixes)
 14. [Full Reference Commands](#FullReferenceCommands)
-15. [Appendix: Windows Build Flow](#Appendix:WindowsBuildFlow)
+15. [Appendix: Windows Build Flow](#windows-build-flow)
 
 ---
 # Overview
