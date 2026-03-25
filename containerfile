@@ -17,6 +17,7 @@ RUN dnf -y install \
       dracut \
       NetworkManager \
       qemu-guest-agent \
+      lvm2 \
   && dnf -y clean all
 
 # Enable critical services
@@ -27,15 +28,15 @@ RUN systemctl enable \
       NetworkManager
 
 # Create admin user
-RUN useradd -m -G wheel britley \
-  && echo 'britley:changeme' | chpasswd
+RUN useradd -m -G wheel test \
+  && echo 'test:changeme' | chpasswd
 
 # Harden SSH and add authorized keys
 RUN sed -i 's/^#\?PasswordAuthentication .*/PasswordAuthentication no/' /etc/ssh/sshd_config
-COPY ssh/authorized_keys /home/britley/.ssh/authorized_keys
-RUN chmod 700 /home/britley/.ssh \
-  && chmod 600 /home/britley/.ssh/authorized_keys \
-  && chown -R britley:britley /home/britley/.ssh
+COPY ssh/authorized_keys /home/test/.ssh/authorized_keys
+RUN chmod 700 /home/test/.ssh \
+  && chmod 600 /home/test/.ssh/authorized_keys \
+  && chown -R test:test /home/test/.ssh
 
 # Ensure SELinux will not block boot
 RUN sed -i 's/^SELINUX=enforcing/SELINUX=permissive/' /etc/selinux/config
@@ -44,6 +45,7 @@ RUN sed -i 's/^SELINUX=enforcing/SELINUX=permissive/' /etc/selinux/config
 COPY dracut/10-s390x.conf /etc/dracut.conf.d/
 COPY fstab /etc/fstab
 COPY network/qeth0.nmconnection /etc/NetworkManager/system-connections/qeth0.nmconnection
+COPY dasd.conf /etc/dasd.conf
 
 # Relabel SELinux after changes
 RUN fixfiles -F relabel
