@@ -80,7 +80,32 @@ parameters = "root=LABEL=rootfs rd.dasd=0.0.0200 rd.zfcp=0.0.4000,0x5005076305ff
 ```bash
 podman build -t rhel10-bootc-s390x:latest .
 ```
+## The official bootc-image-builder container is:
+```
+registry.redhat.io/rhel10/bootc-image-builder:latest
+```
+You must authenticate with your Red Hat account or use a registry service account token to pull it.
+## How to Download / Pull It
+## 1. Log in:
+```
+podman login registry.redhat.io
+```
+## 2. Pull the container:
+```
+podman pull registry.redhat.io/rhel10/bootc-image-builder:latest
+```
+## NOTES:
+bootc-image-builder is only shipped as a container, not an RPM.<br>
+It requires your base bootc image to already exist locally<br>
+Supports image types: RAW, QCOW2, ISO, AMI, VMDK<br>
 
+## 3. Run it:
+```
+podman run --rm -it --privileged \
+  -v /var/lib/containers:/var/lib/containers \
+  registry.redhat.io/rhel10/bootc-image-builder:latest \
+  --type qcow2 --target-arch s390x my-image
+```
 ## Creating Bootable Disk
 ```bash
 bootc-image-builder \
