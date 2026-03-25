@@ -2,20 +2,20 @@
 
 ## Table of Contents
 1. [Overview](#Overview)
-2. Assumptions & Requirements
-3. Architecture Summary
-4. Base Image Acquisition
-5. Creating the Containerfile
-6. Building the bootc Image
-7. Testing the Container Image
-8. Building s390x Bootable Disk Images
-9. Deploying to IBM Z (LPAR or KVM)
-10. LPAR DASD/FCP Boot Requirements
-11. First Boot Validation
-12. Atomic Updates & Rollbacks
-13. Troubleshooting & Known Fixes
-14. Full Reference Commands
-15. Appendix: Windows Build Flow
+2. [Assumptions & Requirements](#Assumptions&Requirements)
+3. [Architecture Summary](#ArchitectureSummary)
+4. [Base Image Acquisition](#BaseImageAcquisition)
+5. [Creating the Containerfile](#CreatingtheContainerfile)
+6. [Building the bootc Image](#BuildingthebootcImage)
+7. [Testing the Container Image](#TestingtheContainerImage)
+8. [Building s390x Bootable Disk Images](#Buildings390xBootableDiskImages)
+9. [Deploying to IBM Z (LPAR or KVM)](#DeployingtoIBMZ(LPARorKVM))
+10. [LPAR DASD/FCP Boot Requirements](#LPARDASD/FCPBootRequirements)
+11. [First Boot Validation](#FirstBootValidation)
+12. [Atomic Updates & Rollbacks](#AtomicUpdates&Rollbacks)
+13. [Troubleshooting & Known Fixes](#Troubleshooting&KnownFixes)
+14. [Full Reference Commands](#FullReferenceCommands)
+15. [Appendix: Windows Build Flow](#Appendix:WindowsBuildFlow)
 
 ---
 # Overview
