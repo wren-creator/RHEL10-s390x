@@ -4,7 +4,7 @@
 1. [Overview](#Overview)
 2. [Assumptions & Requirements](#Assumptions&Requirements)
 3. [Architecture Summary](#ArchitectureSummary)
-4. [Base Image Acquisition](#BaseImageAcquisition)
+4. [Base Image Acquisition](#Base-Image-Acquisition)
 5. [Creating the Containerfile](#CreatingtheContainerfile)
 6. [Building the bootc Image](#BuildingthebootcImage)
 7. [Testing the Container Image](#TestingtheContainerImage)
