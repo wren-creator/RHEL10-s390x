@@ -1,0 +1,24 @@
+FROM registry.redhat.io/rhel10/rhel-bootc
+
+# Install baseline packages (includes s390x tools)
+#COPY s390x-rpms/ /tmp/rpms/
+#RUN rpm -Uvh /tmp/rpms/*.rpm 
+#RUN dnf -y install \
+#    openssh-server \
+#    vim \
+#    curl \
+#    policycoreutils \
+#    chrony \
+#    rsyslog \
+    # storage & s390x tooling
+#    s390utils-base \
+#    zipl \
+
+# Enable services
+#RUN systemctl enable sshd rsyslog chronyd
+
+# Create admin user
+RUN useradd -m -G wheel ts00zu && echo 'ts00zu:changeme' | chpasswd
+
+# Harden SSH
+RUN sed -i 's/^#\?PasswordAuthentication .*/PasswordAuthentication no/' /etc/ssh/sshd_config
