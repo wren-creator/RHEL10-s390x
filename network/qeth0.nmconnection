@@ -1,0 +1,11 @@
+[connection]
+id=qeth0
+type=ethernet
+interface-name=enc600
+autoconnect=true
+
+[ipv4]
+method=dhcp
+
+[ipv6]
+method=ignore
