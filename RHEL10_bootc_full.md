@@ -3,7 +3,7 @@
 ## Table of Contents
 1. [Overview](#Overview)
 2. [Assumptions & Requirements](#assumptions--requirements)
-3. [Architecture Summary](#Architecture-Summary)
+3. [Architecture Summary]
 4. [Base Image Acquisition](#base-image-acquisition)
 5. [Creating the Containerfile](#creating-the-containerfile)
 6. [Building the bootc Image](#building-the-bootc-image)
@@ -14,7 +14,7 @@
 11. [First Boot Validation](#first-boot-validation)
 12. [Atomic Updates & Rollbacks](#atomic-updates--rollbacks)
 13. [Troubleshooting & Known Fixes](#troubleshooting--fixes)
-14. [Full Reference Commands](#FullReferenceCommands)
+14. [Full Reference Commands]
 15. [Appendix: Windows Build Flow](#windows-build-flow)
 
 ---
