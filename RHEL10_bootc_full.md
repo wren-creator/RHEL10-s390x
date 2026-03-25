@@ -2,8 +2,8 @@
 
 ## Table of Contents
 1. [Overview](#Overview)
-2. [Assumptions & Requirements](#Assumptions&Requirements)
-3. [Architecture Summary](#ArchitectureSummary)
+2. [Assumptions & Requirements](#Assumptions-&-Requirements)
+3. [Architecture Summary](#Architecture-Summary)
 4. [Base Image Acquisition](#Base-Image-Acquisition)
 5. [Creating the Containerfile](#CreatingtheContainerfile)
 6. [Building the bootc Image](#BuildingthebootcImage)
