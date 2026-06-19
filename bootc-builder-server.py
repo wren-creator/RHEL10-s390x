@@ -515,6 +515,55 @@ PAGE = r"""<!DOCTYPE html>
   }
   button.build-now:disabled { opacity: 0.4; cursor: not-allowed; }
 
+  /* ── Arch cards ── */
+  .arch-card {
+    font-family: var(--mono);
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 4px;
+    padding: 12px 18px;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 2px;
+    color: var(--text-dim);
+    cursor: pointer;
+    transition: border-color 0.15s, box-shadow 0.15s, color 0.15s;
+    min-width: 150px;
+  }
+  .arch-card:hover {
+    border-color: var(--green-dim);
+    color: var(--text);
+  }
+  .arch-card.selected {
+    border-color: var(--green);
+    color: var(--green);
+    box-shadow: 0 0 12px var(--green-glow);
+  }
+  .arch-card-title { font-size: 13px; font-weight: bold; }
+  .arch-card-sub   { font-size: 11px; color: var(--text-dim); }
+  .arch-card.selected .arch-card-sub { color: var(--green-dim); }
+
+  /* ── Format pills ── */
+  .fmt-pill {
+    font-family: var(--mono);
+    font-size: 12px;
+    padding: 6px 14px;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 2px;
+    color: var(--text-dim);
+    cursor: pointer;
+    letter-spacing: 0.05em;
+    transition: border-color 0.15s, color 0.15s, box-shadow 0.15s;
+  }
+  .fmt-pill:hover { border-color: var(--green-dim); color: var(--text); }
+  .fmt-pill.selected {
+    border-color: var(--green);
+    color: var(--green);
+    box-shadow: 0 0 8px var(--green-glow);
+  }
+
   /* ── Output script ── */
   .output-wrap {
     display: none;
@@ -604,8 +653,8 @@ PAGE = r"""<!DOCTYPE html>
 <body>
 
 <header>
-  <div class="header-label">IBM Z · RHEL 10 · Image Mode</div>
-  <h1>bootc s390x Image Builder</h1>
+  <div class="header-label">RHEL 10 · Image Mode · Multi-Arch</div>
+  <h1>bootc Image Builder</h1>
   <div class="subtitle">configure → pre-flight → generate script or build directly on this host</div>
 </header>
 
@@ -624,6 +673,48 @@ PAGE = r"""<!DOCTYPE html>
 </div>
 
 <form method="POST" action="/generate" id="form">
+
+  <!-- ── 00 Build Target ── -->
+  <div class="section">
+    <div class="section-header">
+      <span class="section-num">00</span>
+      <span class="section-title">Build Target</span>
+    </div>
+    <div class="section-body single">
+      <div>
+        <p style="font-size:11px;color:var(--text-dim);letter-spacing:.08em;text-transform:uppercase;margin-bottom:10px;">Architecture</p>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:20px;">
+          <button type="button" class="arch-card selected" data-arch="s390x" onclick="onArchChange(this)">
+            <span style="font-size:16px;">⬡</span>
+            <span class="arch-card-title">IBM Z — s390x</span>
+            <span class="arch-card-sub">LPAR / KVM / ZD&amp;T</span>
+          </button>
+          <button type="button" class="arch-card" data-arch="x86_64" onclick="onArchChange(this)">
+            <span style="font-size:16px;">□</span>
+            <span class="arch-card-title">x86_64</span>
+            <span class="arch-card-sub">PC / VM / cloud</span>
+          </button>
+          <button type="button" class="arch-card" data-arch="aarch64" onclick="onArchChange(this)">
+            <span style="font-size:16px;">◇</span>
+            <span class="arch-card-title">aarch64</span>
+            <span class="arch-card-sub">ARM64 / cloud</span>
+          </button>
+        </div>
+        <input type="hidden" name="arch" id="arch-val" value="s390x">
+        <p style="font-size:11px;color:var(--text-dim);letter-spacing:.08em;text-transform:uppercase;margin-bottom:10px;">Output format</p>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;">
+          <button type="button" class="fmt-pill selected" data-fmt="raw" onclick="onFmtChange(this)">RAW — block device</button>
+          <button type="button" class="fmt-pill" data-fmt="qcow2" onclick="onFmtChange(this)">QCOW2 — KVM / ZD&amp;T</button>
+          <button type="button" class="fmt-pill" data-fmt="vmdk" onclick="onFmtChange(this)">VMDK — VMware</button>
+          <button type="button" class="fmt-pill" data-fmt="iso" onclick="onFmtChange(this)">ISO — bootable</button>
+        </div>
+        <input type="hidden" name="output_format" id="fmt-val" value="raw">
+        <div class="warn" id="fmt-non-raw-note" style="display:none;margin-top:14px;">
+          Non-RAW formats produce an image file only — no block device deploy step is generated. Transfer or import the output file into your target environment.
+        </div>
+      </div>
+    </div>
+  </div>
 
   <!-- ── 01 Identity ── -->
   <div class="section">
@@ -648,36 +739,37 @@ PAGE = r"""<!DOCTYPE html>
     </div>
   </div>
 
-  <!-- ── 02 Storage ── -->
-  <div class="section">
+  <!-- ── 02 Storage (s390x) ── -->
+  <div class="section" id="s390x-storage">
     <div class="section-header">
       <span class="section-num">02</span>
       <span class="section-title">DASD Storage</span>
+      <span style="font-size:10px;color:var(--green-dim);margin-left:auto;letter-spacing:.08em;">IBM Z ONLY</span>
     </div>
     <div class="section-body">
       <div class="field">
         <label>Boot DASD address</label>
         <input type="text" name="boot_dasd" value="0.0.0200"
                pattern="[0-9a-fA-F]\.[0-9a-fA-F]\.[0-9a-fA-F]{4}"
-               required placeholder="0.0.0200">
+               id="boot_dasd" placeholder="0.0.0200">
         <span class="hint">Goes into dasd.conf and zipl.conf — the DASD the OS boots from</span>
       </div>
       <div class="field">
         <label>DD target DASD device</label>
         <input type="text" name="dd_dasd" value="/dev/dasda"
-               required placeholder="/dev/dasda">
+               id="dd_dasd" placeholder="/dev/dasda">
         <span class="hint">Block device to write the RAW image to (e.g. /dev/dasda, /dev/dasdb)</span>
       </div>
       <div class="field">
         <label>Storage layout</label>
-        <select name="storage_layout">
+        <select name="storage_layout" id="storage_layout">
           <option value="lvm">LVM on DASD (root + /var LVs)</option>
           <option value="single">Single XFS root (no LVM)</option>
         </select>
       </div>
       <div class="field" id="vg-name-field">
         <label>LVM volume group name</label>
-        <input type="text" name="vg_name" value="rhelvg" placeholder="rhelvg">
+        <input type="text" name="vg_name" value="rhelvg" id="vg_name" placeholder="rhelvg">
         <span class="hint">Used in fstab and zipl kernel parameters</span>
       </div>
       <div class="warn">
@@ -686,29 +778,75 @@ PAGE = r"""<!DOCTYPE html>
     </div>
   </div>
 
-  <!-- ── 03 Network ── -->
-  <div class="section">
+  <!-- ── 02 Storage (non-s390x) ── -->
+  <div class="section" id="generic-storage" style="display:none;">
+    <div class="section-header">
+      <span class="section-num">02</span>
+      <span class="section-title">Storage</span>
+    </div>
+    <div class="section-body">
+      <div class="field">
+        <label>Target block device</label>
+        <input type="text" name="target_disk" value="/dev/sda"
+               placeholder="/dev/sda">
+        <span class="hint">Block device to dd the RAW image to (for RAW output only)</span>
+      </div>
+      <div class="field">
+        <label>Storage layout</label>
+        <select name="storage_layout_x86" id="storage_layout_x86">
+          <option value="single">Single XFS root (no LVM)</option>
+        </select>
+        <span class="hint">LVM on x86/aarch64 requires a second disk — coming in a future release</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── 03 Network (s390x) ── -->
+  <div class="section" id="s390x-network">
     <div class="section-header">
       <span class="section-num">03</span>
       <span class="section-title">qeth Network</span>
+      <span style="font-size:10px;color:var(--green-dim);margin-left:auto;letter-spacing:.08em;">IBM Z ONLY</span>
     </div>
     <div class="section-body triple">
       <div class="field">
         <label>qeth base channel</label>
         <input type="text" name="qeth_channel" value="0.0.0600"
                pattern="[0-9a-fA-F]\.[0-9a-fA-F]\.[0-9a-fA-F]{4}"
-               required placeholder="0.0.0600">
+               placeholder="0.0.0600">
         <span class="hint">Channels 0600, 0601, 0602 will be used</span>
       </div>
       <div class="field">
         <label>Interface name</label>
         <input type="text" name="iface" value="enc600"
-               required placeholder="enc600">
+               placeholder="enc600">
         <span class="hint">NM connection interface-name</span>
       </div>
       <div class="field">
         <label>IP configuration</label>
         <select name="ip_method">
+          <option value="dhcp">DHCP</option>
+          <option value="static">Static (edit script after)</option>
+        </select>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── 03 Network (non-s390x) ── -->
+  <div class="section" id="generic-network" style="display:none;">
+    <div class="section-header">
+      <span class="section-num">03</span>
+      <span class="section-title">Network</span>
+    </div>
+    <div class="section-body">
+      <div class="field">
+        <label>Network interface name</label>
+        <input type="text" name="nic" value="eth0" placeholder="eth0">
+        <span class="hint">NM connection interface-name (e.g. eth0, ens3, enp0s3)</span>
+      </div>
+      <div class="field">
+        <label>IP configuration</label>
+        <select name="ip_method_x86">
           <option value="dhcp">DHCP</option>
           <option value="static">Static (edit script after)</option>
         </select>
@@ -775,7 +913,7 @@ PAGE = r"""<!DOCTYPE html>
         </label>
         <div class="toggle-info">
           <div class="toggle-title">FIPS 140-2 mode</div>
-          <div class="toggle-hint">Adds <code>fips=1</code> to zipl kernel parameters, installs <code>crypto-policies-scripts</code>, adds the <code>fips</code> dracut module, and runs <code>update-crypto-policies --set FIPS</code> at build time</div>
+          <div class="toggle-hint" id="fips-hint">Adds <code>fips=1</code> to kernel parameters, installs <code>crypto-policies-scripts</code>, adds the <code>fips</code> dracut module, and runs <code>update-crypto-policies --set FIPS</code> at build time</div>
         </div>
       </div>
       <div class="warn" id="fips-warn" style="display:none;">
@@ -812,7 +950,7 @@ PAGE = r"""<!DOCTYPE html>
 </div><!-- /container -->
 
 <footer>
-  <span>RHEL 10 bootc · IBM Z s390x</span>
+  <span>RHEL 10 bootc · Multi-Arch Image Builder</span>
   <span>base image: registry.redhat.io/rhel10/rhel-bootc:latest</span>
 </footer>
 
@@ -833,6 +971,45 @@ function copyScript() {
     btn.textContent = '[ copied! ]';
     setTimeout(function(){ btn.textContent = '[ copy ]'; }, 2000);
   });
+}
+
+function onArchChange(btn) {
+  // Update card selection
+  document.querySelectorAll('.arch-card').forEach(function(c) { c.classList.remove('selected'); });
+  btn.classList.add('selected');
+  var arch = btn.dataset.arch;
+  document.getElementById('arch-val').value = arch;
+
+  var isS390x = (arch === 's390x');
+
+  // Show/hide storage and network sections
+  document.getElementById('s390x-storage').style.display  = isS390x ? '' : 'none';
+  document.getElementById('generic-storage').style.display = isS390x ? 'none' : '';
+  document.getElementById('s390x-network').style.display   = isS390x ? '' : 'none';
+  document.getElementById('generic-network').style.display  = isS390x ? 'none' : '';
+
+  // Limit format choices for s390x (vmdk not useful on IBM Z)
+  document.querySelectorAll('.fmt-pill').forEach(function(p) {
+    var fmt = p.dataset.fmt;
+    if (!isS390x && fmt === 'raw') {
+      // raw is always available
+    }
+    // vmdk is fine for all arches with bootc-image-builder
+  });
+}
+
+function onFmtChange(btn) {
+  document.querySelectorAll('.fmt-pill').forEach(function(p) { p.classList.remove('selected'); });
+  btn.classList.add('selected');
+  var fmt = btn.dataset.fmt;
+  document.getElementById('fmt-val').value = fmt;
+  var isRaw = (fmt === 'raw');
+  document.getElementById('fmt-non-raw-note').style.display = isRaw ? 'none' : 'block';
+  // Hide target-disk section for non-raw (nothing to dd)
+  var genStor = document.getElementById('generic-storage');
+  if (genStor.style.display !== 'none') {
+    genStor.style.display = isRaw ? '' : 'none';
+  }
 }
 
 function onFipsChange(el) {
@@ -937,29 +1114,36 @@ async function buildNow() {
 # ── Script generator ──────────────────────────────────────────────────────────
 
 def generate_script(p):
-    admin_user    = p.get('admin_user',    ['britley'])[0].strip()
+    # ── Parameters ────────────────────────────────────────────────────────────
+    admin_user    = p.get('admin_user',    ['bootcadmin'])[0].strip()
     ssh_pubkey    = p.get('ssh_pubkey',    [''])[0].strip()
-    boot_dasd     = p.get('boot_dasd',    ['0.0.0200'])[0].strip()
-    dd_dasd       = p.get('dd_dasd',      ['/dev/dasda'])[0].strip()
+    arch          = p.get('arch',          ['s390x'])[0].strip()
+    output_format = p.get('output_format', ['raw'])[0].strip()
+    # s390x-specific
+    boot_dasd     = p.get('boot_dasd',     ['0.0.0200'])[0].strip()
+    dd_dasd       = p.get('dd_dasd',       ['/dev/dasda'])[0].strip()
+    qeth_channel  = p.get('qeth_channel',  ['0.0.0600'])[0].strip()
+    iface         = p.get('iface',         ['enc600'])[0].strip()
+    ip_method     = p.get('ip_method',     ['dhcp'])[0].strip()
     storage       = p.get('storage_layout',['lvm'])[0].strip()
-    vg_name       = p.get('vg_name',      ['rhelvg'])[0].strip()
-    qeth_channel  = p.get('qeth_channel', ['0.0.0600'])[0].strip()
-    iface         = p.get('iface',        ['enc600'])[0].strip()
-    ip_method     = p.get('ip_method',    ['dhcp'])[0].strip()
-    image_name    = p.get('image_name',   ['rhel10-bootc-s390x'])[0].strip()
-    image_tag     = p.get('image_tag',    ['latest'])[0].strip()
-    output_dir    = p.get('output_dir',   ['/var/tmp/bootc-output'])[0].strip()
-    proxy         = p.get('proxy',        [''])[0].strip()
-    selinux_mode  = p.get('selinux_mode', ['permissive'])[0].strip()
-    fips          = p.get('fips',         ['off'])[0].strip()
+    vg_name       = p.get('vg_name',       ['rhelvg'])[0].strip()
+    # non-s390x
+    target_disk   = p.get('target_disk',   ['/dev/sda'])[0].strip()
+    nic           = p.get('nic',           ['eth0'])[0].strip()
+    ip_method_x86 = p.get('ip_method_x86', ['dhcp'])[0].strip()
+    # shared build options
+    image_name    = p.get('image_name',    ['rhel10-bootc'])[0].strip()
+    image_tag     = p.get('image_tag',     ['latest'])[0].strip()
+    output_dir    = p.get('output_dir',    ['/var/tmp/bootc-output'])[0].strip()
+    proxy         = p.get('proxy',         [''])[0].strip()
+    selinux_mode  = p.get('selinux_mode',  ['permissive'])[0].strip()
+    fips          = p.get('fips',          ['off'])[0].strip()
 
-    full_image  = f"{image_name}:{image_tag}"
+    is_s390x = (arch == 's390x')
+    is_raw   = (output_format == 'raw')
+
     builder_img = "registry.redhat.io/rhel10/bootc-image-builder:latest"
     base_img    = "registry.redhat.io/rhel10/rhel-bootc:latest"
-
-    # derive dasd device path from boot_dasd address for dasdfmt
-    dasd_dev_short = boot_dasd.split('.')[-1]  # e.g. 0200
-    # dd_dasd is already a /dev path
 
     proxy_block = ""
     if proxy:
@@ -971,12 +1155,19 @@ export no_proxy="localhost,127.0.0.1,registry.redhat.io"
 
     fips_param = " fips=1" if fips == "on" else ""
 
+    # ── Arch-specific: packages ────────────────────────────────────────────────
     pkgs = [
         "      openssh-server", "      vim", "      curl", "      chrony",
-        "      rsyslog", "      policycoreutils", "      s390utils-base",
-        "      zipl", "      dracut", "      NetworkManager", "      util-linux",
+        "      rsyslog", "      policycoreutils", "      dracut",
+        "      NetworkManager", "      util-linux",
     ]
-    if storage == "lvm":
+    if is_s390x:
+        pkgs += ["      s390utils-base", "      zipl"]
+    elif arch == 'x86_64':
+        pkgs += ["      grub2", "      grub2-pc", "      grub2-efi-x64", "      grub2-efi-x64-modules"]
+    else:  # aarch64
+        pkgs += ["      grub2-efi-aa64", "      grub2-efi-aa64-modules"]
+    if is_s390x and storage == "lvm":
         pkgs.append("      lvm2")
     if fips == "on":
         pkgs.append("      crypto-policies-scripts")
@@ -985,12 +1176,60 @@ export no_proxy="localhost,127.0.0.1,registry.redhat.io"
 
     fips_policy_block = "\n# FIPS crypto policy\nRUN update-crypto-policies --set FIPS" if fips == "on" else ""
 
-    if storage == 'lvm':
+    # ── Arch-specific: dracut config ───────────────────────────────────────────
+    dracut_s390x_line = 'add_drivers+=" dasd_mod dasd_eckd_mod qdio qeth qeth_l2 zfcp "' if is_s390x else ''
+    dracut_lvm_line   = 'add_dracutmodules+=" lvm "'  if (is_s390x and storage == "lvm") else ''
+    dracut_fips_line  = 'add_dracutmodules+=" fips "' if fips == "on" else ''
+
+    # ── Arch-specific: network ─────────────────────────────────────────────────
+    if is_s390x:
+        net_filename = 'qeth0.nmconnection'
+        net_id       = 'qeth0'
+        net_iface    = iface
+        net_ipmethod = ip_method
+    else:
+        net_filename = 'eth0.nmconnection'
+        net_id       = 'eth0'
+        net_iface    = nic
+        net_ipmethod = ip_method_x86
+
+    # ── Arch-specific: bootloader / DASD files ─────────────────────────────────
+    if is_s390x:
+        if storage == 'lvm':
+            zipl_params = (f"root=/dev/{vg_name}/root rd.dasd={boot_dasd} "
+                           f"rd.lvm.lv={vg_name}/root rd.lvm.lv={vg_name}/var "
+                           f"rd.net=qeth,{qeth_channel},layer2=1{fips_param}")
+        else:
+            zipl_params = (f"root=LABEL=rootfs rd.dasd={boot_dasd} "
+                           f"rd.net=qeth,{qeth_channel},layer2=1{fips_param}")
+
+        dasd_write_step = (f'log "Writing dasd.conf..."\n'
+                           f"printf '{boot_dasd} 1\\n' > \"${{BUILD_CTX}}/dasd.conf\"")
+        zipl_write_step = f"""log "Writing zipl/zipl.conf..."
+cat > "${{BUILD_CTX}}/zipl/zipl.conf" << 'EOF'
+[defaultboot]
+default = linux
+
+[linux]
+target = /boot
+kernel = /boot/vmlinuz
+ramdisk = /boot/initramfs.img
+parameters = "{zipl_params}"
+EOF"""
+        dasd_cf_copy = "COPY dasd.conf /etc/dasd.conf"
+        zipl_cf_copy = "COPY zipl/zipl.conf /etc/zipl.conf"
+    else:
+        dasd_write_step = ''
+        zipl_write_step = ''
+        dasd_cf_copy    = ''
+        zipl_cf_copy    = ''
+
+    # ── Storage: LVM firstboot (s390x only) ────────────────────────────────────
+    if is_s390x and storage == 'lvm':
         fstab_content = f"/dev/{vg_name}/root   /       xfs  defaults  0 0\\n/dev/{vg_name}/var    /var    xfs  defaults  0 0"
-        zipl_params   = f"root=/dev/{vg_name}/root rd.dasd={boot_dasd} rd.lvm.lv={vg_name}/root rd.lvm.lv={vg_name}/var rd.net=qeth,{qeth_channel},layer2=1{fips_param}"
         firstboot_section = f"""
 # ─────────────────────────────────────────────────────────────────────────────
-# STEP 5 · Write firstboot-lvm.sh
+# STEP 2b · Write firstboot-lvm.sh
 # ─────────────────────────────────────────────────────────────────────────────
 log "Writing firstboot-lvm.sh..."
 cat > "${{BUILD_CTX}}/scripts/firstboot-lvm.sh" << 'FBEOF'
@@ -1055,30 +1294,145 @@ StandardError=journal+console
 WantedBy=multi-user.target
 SVCEOF
 """
-        firstboot_containerfile = f"""# First-boot LVM automation
+        firstboot_containerfile = """# First-boot LVM automation
 COPY scripts/firstboot-lvm.sh /usr/local/sbin/firstboot-lvm.sh
 COPY systemd/firstboot-lvm.service /etc/systemd/system/firstboot-lvm.service
 RUN chmod 0755 /usr/local/sbin/firstboot-lvm.sh \\\\
     && systemctl enable firstboot-lvm.service"""
     else:
-        fstab_content  = "LABEL=rootfs / xfs defaults 0 0"
-        zipl_params    = f"root=LABEL=rootfs rd.dasd={boot_dasd} rd.net=qeth,{qeth_channel},layer2=1{fips_param}"
+        fstab_content = "LABEL=rootfs / xfs defaults 0 0"
         firstboot_section = ""
-        firstboot_containerfile = "# No LVM — single XFS root, no firstboot service needed"
+        firstboot_containerfile = "# Single XFS root — no firstboot LVM service"
 
+    # ── Deploy steps ────────────────────────────────────────────────────────────
+    if is_s390x and is_raw:
+        deploy_section = f"""
+# ─────────────────────────────────────────────────────────────────────────────
+# STEP 6 · Bring DASD online
+# ─────────────────────────────────────────────────────────────────────────────
+step "Bringing DASD $BOOT_DASD online"
+cio_ignore -r "$BOOT_DASD" 2>/dev/null || true
+chccwdev -e "$BOOT_DASD"
+for i in $(seq 1 20); do
+    [ -b "$DD_TARGET" ] && break
+    warn "Waiting for $DD_TARGET... ($i/20)"
+    sleep 1
+done
+[ -b "$DD_TARGET" ] || err "$DD_TARGET did not appear after 20 seconds"
+lsdasd | grep -i "${{BOOT_DASD##*.}}" || warn "Could not confirm DASD status — check lsdasd manually"
+log "DASD online: $DD_TARGET"
+
+# ─────────────────────────────────────────────────────────────────────────────
+# STEP 7 · Low-level format (dasdfmt) + partition
+# ─────────────────────────────────────────────────────────────────────────────
+step "Formatting DASD (CDL, 4096b blocks)"
+warn "This will ERASE all data on $DD_TARGET"
+read -r -p "Type YES to continue: " CONFIRM
+[ "$CONFIRM" = "YES" ] || err "Aborted by user"
+dasdfmt -b 4096 -d cdl -y "$DD_TARGET"
+fdasd -a "$DD_TARGET"
+log "DASD formatted and partitioned"
+
+# ─────────────────────────────────────────────────────────────────────────────
+# STEP 8 · dd image to DASD
+# ─────────────────────────────────────────────────────────────────────────────
+step "Writing RAW image to $DD_TARGET"
+dd if="$OUTPUT_IMAGE" of="$DD_TARGET" bs=64M status=progress
+sync
+log "dd complete — write buffers flushed"
+
+# ─────────────────────────────────────────────────────────────────────────────
+# STEP 9 · Install zipl bootloader
+# ─────────────────────────────────────────────────────────────────────────────
+step "Installing zipl bootloader"
+MOUNT_PT="/mnt/bootc-zipl"
+mkdir -p "$MOUNT_PT"
+mount "${{DD_TARGET}}1" "$MOUNT_PT" || mount "${{DD_TARGET}}p1" "$MOUNT_PT" || \\
+    err "Could not mount $DD_TARGET partition — check fdasd output"
+zipl --verbose --target "$MOUNT_PT"
+umount "$MOUNT_PT"
+log "zipl installed"
+"""
+        done_block = f"""echo ""
+echo -e "${{GRN}}══════════════════════════════════════════════════════${{NC}}"
+echo -e "${{GRN}}  Build and deploy complete${{NC}}"
+echo -e "${{GRN}}══════════════════════════════════════════════════════${{NC}}"
+echo ""
+echo "  IPL address : ${{BOOT_DASD##*.}}"
+echo "  First login : ssh ${{ADMIN_USER}}@<lpar-ip>"
+echo "  Default pw  : Ch@ngeMe1st!  (expires on first login)"
+echo ""
+echo "  IPL the LPAR from HMC: Load → Normal → ${{BOOT_DASD##*.}}"
+echo ""
+"""
+    elif is_raw:
+        deploy_section = f"""
+# ─────────────────────────────────────────────────────────────────────────────
+# STEP 6 · Write RAW image to target disk
+# ─────────────────────────────────────────────────────────────────────────────
+step "Writing RAW image to {target_disk}"
+[ -b "{target_disk}" ] || err "{target_disk} is not a block device — check target disk"
+warn "This will ERASE all data on {target_disk}"
+read -r -p "Type YES to continue: " CONFIRM
+[ "$CONFIRM" = "YES" ] || err "Aborted by user"
+dd if="$OUTPUT_IMAGE" of="{target_disk}" bs=64M status=progress
+sync
+log "dd complete — boot the target machine from {target_disk}"
+"""
+        done_block = f"""echo ""
+echo -e "${{GRN}}══════════════════════════════════════════════════════${{NC}}"
+echo -e "${{GRN}}  Build and deploy complete${{NC}}"
+echo -e "${{GRN}}══════════════════════════════════════════════════════${{NC}}"
+echo ""
+echo "  Boot disk   : {target_disk}"
+echo "  First login : ssh ${{ADMIN_USER}}@<ip>"
+echo "  Default pw  : Ch@ngeMe1st!  (expires on first login)"
+echo ""
+"""
+    else:
+        deploy_section = ""
+        done_block = f"""echo ""
+echo -e "${{GRN}}══════════════════════════════════════════════════════${{NC}}"
+echo -e "${{GRN}}  {output_format.upper()} image ready${{NC}}"
+echo -e "${{GRN}}══════════════════════════════════════════════════════${{NC}}"
+echo ""
+echo "  Output : $OUTPUT_IMAGE"
+echo "  Size   : $(du -sh "$OUTPUT_IMAGE" | cut -f1)"
+echo ""
+echo "  Import this image into your target environment."
+echo ""
+"""
+
+    # ── Preflight disk check ────────────────────────────────────────────────────
+    if is_raw:
+        if is_s390x:
+            preflight_disk_check = '[ -b "$DD_TARGET" ] || err "DD target $DD_TARGET is not a block device"'
+        else:
+            preflight_disk_check = f'[ -b "{target_disk}" ] || err "Target {target_disk} is not a block device"'
+    else:
+        preflight_disk_check = f'log "Output format: {output_format} — no block device required"'
+
+    # ── Script-level vars ────────────────────────────────────────────────────────
+    if is_s390x:
+        arch_vars = f'BOOT_DASD="{boot_dasd}"\nDD_TARGET="{dd_dasd}"'
+    else:
+        arch_vars = ''
+
+    storage_label = (f"LVM on {'DASD' if is_s390x else 'disk'} (VG: {vg_name})"
+                     if (is_s390x and storage == 'lvm') else "Single XFS root")
+
+    # ── Assemble script ─────────────────────────────────────────────────────────
     script = f"""#!/bin/bash
 # =============================================================================
-# build-and-deploy.sh
-# Generated by bootc-builder-server
+# build-and-deploy.sh  —  Generated by bootc-builder-server
 #
-# RHEL 10 bootc s390x — build and deploy to DASD
+# Arch        : {arch}
+# Output      : {output_format.upper()}
 # Admin user  : {admin_user}
-# Boot DASD   : {boot_dasd}
-# DD target   : {dd_dasd}
-# qeth channel: {qeth_channel} / {iface}
-# Storage     : {"LVM on DASD (VG: " + vg_name + ")" if storage == "lvm" else "Single XFS root"}
+# Storage     : {storage_label}
 # SELinux     : {selinux_mode}
 # FIPS        : {"enabled" if fips == "on" else "disabled"}
+{'# Boot DASD   : ' + boot_dasd + chr(10) + '# qeth channel: ' + qeth_channel + ' / ' + iface if is_s390x else '# Target disk : ' + target_disk + chr(10) + '# NIC         : ' + nic}
 # Base image  : {base_img}
 # =============================================================================
 set -euo pipefail
@@ -1097,8 +1451,7 @@ IMAGE_TAG="{image_tag}"
 FULL_IMAGE="${{IMAGE_NAME}}:${{IMAGE_TAG}}"
 BUILDER_IMAGE="{builder_img}"
 ADMIN_USER="{admin_user}"
-BOOT_DASD="{boot_dasd}"
-DD_TARGET="{dd_dasd}"
+{arch_vars}
 {proxy_block}
 # ─────────────────────────────────────────────────────────────────────────────
 # STEP 0 · Pre-flight checks
@@ -1106,7 +1459,7 @@ DD_TARGET="{dd_dasd}"
 step "Pre-flight checks"
 command -v podman >/dev/null 2>&1 || err "podman not found — install it first"
 [ "$(id -u)" -eq 0 ] || err "This script must run as root (or with sudo)"
-[ -b "$DD_TARGET" ] || err "DD target $DD_TARGET is not a block device — check device address"
+{preflight_disk_check}
 mkdir -p "$BUILD_CTX/dracut" "$BUILD_CTX/network" "$BUILD_CTX/ssh" \\
          "$BUILD_CTX/zipl" "$BUILD_CTX/scripts" "$BUILD_CTX/systemd" \\
          "$BUILD_CTX/rpms" "$OUTPUT_DIR"
@@ -1124,48 +1477,37 @@ podman login registry.redhat.io || err "Registry login failed"
 # ─────────────────────────────────────────────────────────────────────────────
 step "Writing build context to $BUILD_CTX"
 
-log "Writing dracut/10-s390x.conf..."
-cat > "${{BUILD_CTX}}/dracut/10-s390x.conf" << 'EOF'
-add_drivers+=" dasd_mod dasd_eckd_mod qdio qeth qeth_l2 zfcp "
-{"add_dracutmodules+=\" lvm \"" if storage == "lvm" else ""}
-{"add_dracutmodules+=\" fips \"" if fips == "on" else ""}
+log "Writing dracut/bootc.conf..."
+cat > "${{BUILD_CTX}}/dracut/bootc.conf" << 'EOF'
+{dracut_s390x_line}
+{dracut_lvm_line}
+{dracut_fips_line}
 hostonly="no"
 omit_drivers+=" floppy "
 EOF
 
-log "Writing network/qeth0.nmconnection..."
-cat > "${{BUILD_CTX}}/network/qeth0.nmconnection" << 'EOF'
+log "Writing network/{net_filename}..."
+cat > "${{BUILD_CTX}}/network/{net_filename}" << 'EOF'
 [connection]
-id=qeth0
+id={net_id}
 type=ethernet
-interface-name={iface}
+interface-name={net_iface}
 autoconnect=true
 
 [ipv4]
-method={ip_method}
+method={net_ipmethod}
 
 [ipv6]
 method=ignore
 EOF
-chmod 600 "${{BUILD_CTX}}/network/qeth0.nmconnection"
+chmod 600 "${{BUILD_CTX}}/network/{net_filename}"
 
 log "Writing fstab..."
 printf '{fstab_content}\\n' > "${{BUILD_CTX}}/fstab"
 
-log "Writing dasd.conf..."
-printf '{boot_dasd} 1\\n' > "${{BUILD_CTX}}/dasd.conf"
+{dasd_write_step}
 
-log "Writing zipl/zipl.conf..."
-cat > "${{BUILD_CTX}}/zipl/zipl.conf" << 'EOF'
-[defaultboot]
-default = linux
-
-[linux]
-target = /boot
-kernel = /boot/vmlinuz
-ramdisk = /boot/initramfs.img
-parameters = "{zipl_params}"
-EOF
+{zipl_write_step}
 
 log "Writing ssh/authorized_keys..."
 cat > "${{BUILD_CTX}}/ssh/authorized_keys" << 'EOF'
@@ -1209,13 +1551,13 @@ COPY ssh/authorized_keys /home/{admin_user}/.ssh/authorized_keys
 RUN chmod 600 /home/{admin_user}/.ssh/authorized_keys \\
     && chown {admin_user}:{admin_user} /home/{admin_user}/.ssh/authorized_keys
 
-# s390x configs
-COPY dracut/10-s390x.conf /etc/dracut.conf.d/10-s390x.conf
+# Dracut / initramfs config
+COPY dracut/bootc.conf /etc/dracut.conf.d/bootc.conf
 COPY fstab /etc/fstab
-COPY dasd.conf /etc/dasd.conf
-COPY network/qeth0.nmconnection /etc/NetworkManager/system-connections/qeth0.nmconnection
-RUN chmod 600 /etc/NetworkManager/system-connections/qeth0.nmconnection
-COPY zipl/zipl.conf /etc/zipl.conf
+COPY network/{net_filename} /etc/NetworkManager/system-connections/{net_filename}
+RUN chmod 600 /etc/NetworkManager/system-connections/{net_filename}
+{dasd_cf_copy}
+{zipl_cf_copy}
 
 {firstboot_containerfile}
 
@@ -1235,7 +1577,7 @@ log "Containerfile written"
 # ─────────────────────────────────────────────────────────────────────────────
 step "Building container image: $FULL_IMAGE"
 podman build \\
-    --platform linux/s390x \\
+    --platform linux/{arch} \\
     --tls-verify=false \\
     --volume /etc/pki/entitlement:/etc/pki/entitlement:ro \\
     --volume /etc/rhsm:/etc/rhsm:ro \\
@@ -1247,84 +1589,27 @@ podman build \\
 log "Container image built: $FULL_IMAGE"
 
 # ─────────────────────────────────────────────────────────────────────────────
-# STEP 5 · bootc-image-builder → RAW image
+# STEP 5 · bootc-image-builder → {output_format.upper()} image
 # ─────────────────────────────────────────────────────────────────────────────
-step "Running bootc-image-builder → RAW"
+step "Running bootc-image-builder → {output_format.upper()}"
 podman run --rm -it \\
     --privileged \\
     --security-opt seccomp=unconfined \\
     -v /var/lib/containers:/var/lib/containers \\
     -v "${{OUTPUT_DIR}}:/output" \\
     "$BUILDER_IMAGE" \\
-    --type raw \\
-    --target-arch s390x \\
+    --type {output_format} \\
+    --target-arch {arch} \\
     "$FULL_IMAGE"
 
-RAW_IMAGE=$(find "$OUTPUT_DIR" -name "*.raw" | head -1)
-[ -f "$RAW_IMAGE" ] || err "RAW image not found in $OUTPUT_DIR"
-log "RAW image: $RAW_IMAGE ($(du -sh "$RAW_IMAGE" | cut -f1))"
-
-# ─────────────────────────────────────────────────────────────────────────────
-# STEP 6 · Bring DASD online
-# ─────────────────────────────────────────────────────────────────────────────
-step "Bringing DASD $BOOT_DASD online"
-cio_ignore -r "$BOOT_DASD" 2>/dev/null || true
-chccwdev -e "$BOOT_DASD"
-for i in $(seq 1 20); do
-    [ -b "$DD_TARGET" ] && break
-    warn "Waiting for $DD_TARGET... ($i/20)"
-    sleep 1
-done
-[ -b "$DD_TARGET" ] || err "$DD_TARGET did not appear after 20 seconds"
-lsdasd | grep -i "${{BOOT_DASD##*.}}" || warn "Could not confirm DASD status — check lsdasd manually"
-log "DASD online: $DD_TARGET"
-
-# ─────────────────────────────────────────────────────────────────────────────
-# STEP 7 · Low-level format (dasdfmt) + partition
-# ─────────────────────────────────────────────────────────────────────────────
-step "Formatting DASD (CDL, 4096b blocks)"
-warn "This will ERASE all data on $DD_TARGET"
-read -r -p "Type YES to continue: " CONFIRM
-[ "$CONFIRM" = "YES" ] || err "Aborted by user"
-dasdfmt -b 4096 -d cdl -y "$DD_TARGET"
-fdasd -a "$DD_TARGET"
-log "DASD formatted and partitioned"
-
-# ─────────────────────────────────────────────────────────────────────────────
-# STEP 8 · dd image to DASD
-# ─────────────────────────────────────────────────────────────────────────────
-step "Writing RAW image to $DD_TARGET"
-dd if="$RAW_IMAGE" of="$DD_TARGET" bs=64M status=progress
-sync
-log "dd complete — write buffers flushed"
-
-# ─────────────────────────────────────────────────────────────────────────────
-# STEP 9 · Install zipl bootloader
-# ─────────────────────────────────────────────────────────────────────────────
-step "Installing zipl bootloader"
-MOUNT_PT="/mnt/bootc-zipl"
-mkdir -p "$MOUNT_PT"
-mount "${{DD_TARGET}}1" "$MOUNT_PT" || mount "${{DD_TARGET}}p1" "$MOUNT_PT" || \\
-    err "Could not mount $DD_TARGET partition — check fdasd output"
-zipl --verbose --target "$MOUNT_PT"
-umount "$MOUNT_PT"
-log "zipl installed"
-
+OUTPUT_IMAGE=$(find "$OUTPUT_DIR" -name "*.{output_format}" | head -1)
+[ -f "$OUTPUT_IMAGE" ] || err "{output_format.upper()} image not found in $OUTPUT_DIR"
+log "{output_format.upper()} image: $OUTPUT_IMAGE ($(du -sh "$OUTPUT_IMAGE" | cut -f1))"
+{deploy_section}
 # ─────────────────────────────────────────────────────────────────────────────
 # DONE
 # ─────────────────────────────────────────────────────────────────────────────
-echo ""
-echo -e "${{GRN}}══════════════════════════════════════════════════════${{NC}}"
-echo -e "${{GRN}}  Build and deploy complete${{NC}}"
-echo -e "${{GRN}}══════════════════════════════════════════════════════${{NC}}"
-echo ""
-echo "  IPL address : ${{BOOT_DASD##*.}}"
-echo "  First login : ssh ${{ADMIN_USER}}@<lpar-ip>"
-echo "  Default pw  : Ch@ngeMe1st!  (expires on first login)"
-echo ""
-echo "  IPL the LPAR from HMC: Load → Normal → ${{BOOT_DASD##*.}}"
-echo ""
-"""
+{done_block}"""
     return script
 
 
