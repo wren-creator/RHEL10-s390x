@@ -240,6 +240,67 @@ PAGE = r"""<!DOCTYPE html>
 
   .warn::before { content: '⚠ '; }
 
+  /* ── Toggle switch ── */
+  .toggle-row {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    padding: 10px 0 2px;
+    grid-column: 1 / -1;
+  }
+
+  .toggle-switch {
+    position: relative;
+    width: 46px;
+    height: 24px;
+    flex-shrink: 0;
+  }
+
+  .toggle-switch input[type=checkbox] { display: none; }
+
+  .toggle-track {
+    position: absolute;
+    inset: 0;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    cursor: pointer;
+    transition: background 0.2s, border-color 0.2s, box-shadow 0.2s;
+  }
+
+  .toggle-switch input:checked ~ .toggle-track {
+    background: var(--green-dim);
+    border-color: var(--green-dim);
+    box-shadow: 0 0 10px var(--green-glow);
+  }
+
+  .toggle-track::after {
+    content: '';
+    position: absolute;
+    top: 3px; left: 3px;
+    width: 16px; height: 16px;
+    background: var(--text-dim);
+    border-radius: 50%;
+    transition: transform 0.2s, background 0.2s;
+  }
+
+  .toggle-switch input:checked ~ .toggle-track::after {
+    transform: translateX(22px);
+    background: var(--green);
+  }
+
+  .toggle-info { flex: 1; }
+  .toggle-title { font-size: 13px; color: var(--text); margin-bottom: 3px; }
+  .toggle-hint  { font-size: 11px; color: var(--text-dim); line-height: 1.5; }
+  .toggle-hint code {
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--green-dim);
+    background: rgba(57,255,20,0.06);
+    padding: 1px 4px;
+    border-radius: 2px;
+  }
+
   /* ── Generate button ── */
   .generate-wrap {
     display: flex;
@@ -503,6 +564,42 @@ PAGE = r"""<!DOCTYPE html>
     </div>
   </div>
 
+  <!-- ── 05 Security ── -->
+  <div class="section">
+    <div class="section-header">
+      <span class="section-num">05</span>
+      <span class="section-title">Security</span>
+    </div>
+    <div class="section-body">
+      <div class="field">
+        <label>SELinux mode</label>
+        <select name="selinux_mode" id="selinux-select" onchange="onSelinuxChange(this)">
+          <option value="enforcing">Enforcing — full policy enforcement</option>
+          <option value="permissive" selected>Permissive — log only (recommended for first boot)</option>
+          <option value="disabled">Disabled — no SELinux</option>
+        </select>
+        <span class="hint">Written to /etc/selinux/config — switch to enforcing after first boot is stable</span>
+      </div>
+      <div></div>
+      <div class="warn" id="selinux-warn" style="display:none;">
+        Disabling SELinux removes all mandatory access control. Use Permissive for initial deployment and switch to Enforcing once the system is validated.
+      </div>
+      <div class="toggle-row">
+        <label class="toggle-switch">
+          <input type="checkbox" name="fips" id="fips-chk" value="on" onchange="onFipsChange(this)">
+          <span class="toggle-track"></span>
+        </label>
+        <div class="toggle-info">
+          <div class="toggle-title">FIPS 140-2 mode</div>
+          <div class="toggle-hint">Adds <code>fips=1</code> to zipl kernel parameters, installs <code>crypto-policies-scripts</code>, adds the <code>fips</code> dracut module, and runs <code>update-crypto-policies --set FIPS</code> at build time</div>
+        </div>
+      </div>
+      <div class="warn" id="fips-warn" style="display:none;">
+        FIPS restricts allowed algorithms and key sizes. Confirm your SSH key type is FIPS-compatible (RSA ≥ 2048 or ed25519). A full re-IPL is required after first boot to activate the FIPS kernel parameter.
+      </div>
+    </div>
+  </div>
+
   <div class="generate-wrap">
     <button type="submit">&#x25B6;&nbsp; Generate Script</button>
   </div>
@@ -543,6 +640,14 @@ function copyScript() {
     setTimeout(function(){ btn.textContent = '[ copy ]'; }, 2000);
   });
 }
+
+function onFipsChange(el) {
+  document.getElementById('fips-warn').style.display = el.checked ? 'block' : 'none';
+}
+
+function onSelinuxChange(el) {
+  document.getElementById('selinux-warn').style.display = el.value === 'disabled' ? 'block' : 'none';
+}
 </script>
 
 </body>
@@ -565,6 +670,8 @@ def generate_script(p):
     image_tag     = p.get('image_tag',    ['latest'])[0].strip()
     output_dir    = p.get('output_dir',   ['/var/tmp/bootc-output'])[0].strip()
     proxy         = p.get('proxy',        [''])[0].strip()
+    selinux_mode  = p.get('selinux_mode', ['permissive'])[0].strip()
+    fips          = p.get('fips',         ['off'])[0].strip()
 
     full_image  = f"{image_name}:{image_tag}"
     builder_img = "registry.redhat.io/rhel10/bootc-image-builder:latest"
@@ -582,9 +689,25 @@ export https_proxy="{proxy}"
 export no_proxy="localhost,127.0.0.1,registry.redhat.io"
 """
 
+    fips_param = " fips=1" if fips == "on" else ""
+
+    pkgs = [
+        "      openssh-server", "      vim", "      curl", "      chrony",
+        "      rsyslog", "      policycoreutils", "      s390utils-base",
+        "      zipl", "      dracut", "      NetworkManager", "      util-linux",
+    ]
+    if storage == "lvm":
+        pkgs.append("      lvm2")
+    if fips == "on":
+        pkgs.append("      crypto-policies-scripts")
+    pkgs.append("      qemu-guest-agent")
+    pkg_install_lines = " \\\n".join(pkgs) + " \\"
+
+    fips_policy_block = "\n# FIPS crypto policy\nRUN update-crypto-policies --set FIPS" if fips == "on" else ""
+
     if storage == 'lvm':
         fstab_content = f"/dev/{vg_name}/root   /       xfs  defaults  0 0\\n/dev/{vg_name}/var    /var    xfs  defaults  0 0"
-        zipl_params   = f"root=/dev/{vg_name}/root rd.dasd={boot_dasd} rd.lvm.lv={vg_name}/root rd.lvm.lv={vg_name}/var rd.net=qeth,{qeth_channel},layer2=1"
+        zipl_params   = f"root=/dev/{vg_name}/root rd.dasd={boot_dasd} rd.lvm.lv={vg_name}/root rd.lvm.lv={vg_name}/var rd.net=qeth,{qeth_channel},layer2=1{fips_param}"
         firstboot_section = f"""
 # ─────────────────────────────────────────────────────────────────────────────
 # STEP 5 · Write firstboot-lvm.sh
@@ -659,7 +782,7 @@ RUN chmod 0755 /usr/local/sbin/firstboot-lvm.sh \\\\
     && systemctl enable firstboot-lvm.service"""
     else:
         fstab_content  = "LABEL=rootfs / xfs defaults 0 0"
-        zipl_params    = f"root=LABEL=rootfs rd.dasd={boot_dasd} rd.net=qeth,{qeth_channel},layer2=1"
+        zipl_params    = f"root=LABEL=rootfs rd.dasd={boot_dasd} rd.net=qeth,{qeth_channel},layer2=1{fips_param}"
         firstboot_section = ""
         firstboot_containerfile = "# No LVM — single XFS root, no firstboot service needed"
 
@@ -674,6 +797,8 @@ RUN chmod 0755 /usr/local/sbin/firstboot-lvm.sh \\\\
 # DD target   : {dd_dasd}
 # qeth channel: {qeth_channel} / {iface}
 # Storage     : {"LVM on DASD (VG: " + vg_name + ")" if storage == "lvm" else "Single XFS root"}
+# SELinux     : {selinux_mode}
+# FIPS        : {"enabled" if fips == "on" else "disabled"}
 # Base image  : {base_img}
 # =============================================================================
 set -euo pipefail
@@ -723,6 +848,7 @@ log "Writing dracut/10-s390x.conf..."
 cat > "${{BUILD_CTX}}/dracut/10-s390x.conf" << 'EOF'
 add_drivers+=" dasd_mod dasd_eckd_mod qdio qeth qeth_l2 zfcp "
 {"add_dracutmodules+=\" lvm \"" if storage == "lvm" else ""}
+{"add_dracutmodules+=\" fips \"" if fips == "on" else ""}
 hostonly="no"
 omit_drivers+=" floppy "
 EOF
@@ -780,20 +906,9 @@ RUN rpm -Uvh /tmp/rpms/*.rpm 2>/dev/null || true
 
 # Install packages
 RUN dnf -y install \\
-      openssh-server \\
-      vim \\
-      curl \\
-      chrony \\
-      rsyslog \\
-      policycoreutils \\
-      s390utils-base \\
-      zipl \\
-      dracut \\
-      NetworkManager \\
-      util-linux \\
-      {"lvm2 \\\\" if storage == "lvm" else "\\\\"}
-      qemu-guest-agent \\
+{pkg_install_lines}
   && dnf -y clean all
+{fips_policy_block}
 
 # Enable services
 RUN systemctl enable sshd rsyslog chronyd NetworkManager
@@ -824,17 +939,14 @@ COPY zipl/zipl.conf /etc/zipl.conf
 
 {firstboot_containerfile}
 
-# SELinux permissive for first boot
-RUN sed -i 's/^SELINUX=enforcing/SELINUX=permissive/' /etc/selinux/config
+# SELinux: {selinux_mode}
+RUN sed -i 's/^SELINUX=.*/SELINUX={selinux_mode}/' /etc/selinux/config
 
 # Rebuild initramfs
 RUN dracut -f --regenerate-all
 
 # SELinux relabel
 RUN fixfiles -F relabel
-
-# bootc metadata
-RUN bootc install-to-filesystem --rootfs /
 CFEOF
 log "Containerfile written"
 

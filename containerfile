@@ -60,6 +60,3 @@ RUN dracut -f
 
 # Relabel SELinux after changes
 RUN fixfiles -F relabel
-
-# Ensure metadata exists for bootc-image-builder
-RUN bootc install-to-filesystem --rootfs /
