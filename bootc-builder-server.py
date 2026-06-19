@@ -6,12 +6,120 @@ Run on your zLinux build host:
 Then open http://<host-ip>:8080 from any browser on your network.
 """
 
-from http.server import HTTPServer, BaseHTTPRequestHandler
+from http.server import HTTPServer, ThreadingHTTPServer, BaseHTTPRequestHandler
 from urllib.parse import parse_qs, urlparse
 import html
+import json
+import os
+import subprocess
 import sys
+import threading
+import time
+import uuid
 
 PORT = 8080
+
+jobs = {}  # job_id → {'lines': [], 'done': False, 'rc': None, 'lock': Lock}
+
+
+def run_preflight():
+    """Check build host readiness. Returns list of {name, ok, detail} dicts."""
+    import shutil
+    import socket as _socket
+    checks = []
+
+    podman_path = shutil.which('podman')
+    checks.append({
+        'name': 'podman installed',
+        'ok': podman_path is not None,
+        'detail': podman_path or 'not found — dnf install podman',
+    })
+
+    ent_dir = '/etc/pki/entitlement'
+    try:
+        pems = [f for f in os.listdir(ent_dir) if f.endswith('.pem')]
+        ent_ok = len(pems) > 0
+        ent_detail = f'{len(pems)} cert(s) found' if ent_ok else 'empty — run subscription-manager register'
+    except FileNotFoundError:
+        ent_ok, ent_detail = False, f'{ent_dir} missing — run subscription-manager register'
+    checks.append({'name': 'RHEL entitlement certs', 'ok': ent_ok, 'detail': ent_detail})
+
+    rhsm_ok = os.path.isfile('/etc/rhsm/rhsm.conf')
+    checks.append({
+        'name': '/etc/rhsm config',
+        'ok': rhsm_ok,
+        'detail': 'present' if rhsm_ok else 'missing — system may not be subscribed',
+    })
+
+    repo_ok = os.path.isfile('/etc/yum.repos.d/redhat.repo')
+    checks.append({
+        'name': 'redhat.repo',
+        'ok': repo_ok,
+        'detail': 'present' if repo_ok else 'missing — run subscription-manager refresh',
+    })
+
+    try:
+        sock = _socket.create_connection(('registry.redhat.io', 443), timeout=5)
+        sock.close()
+        reg_ok, reg_detail = True, 'reachable'
+    except Exception as exc:
+        reg_ok, reg_detail = False, str(exc)
+    checks.append({'name': 'registry.redhat.io reachable', 'ok': reg_ok, 'detail': reg_detail})
+
+    if podman_path:
+        try:
+            r = subprocess.run(
+                ['podman', 'login', '--get-login', 'registry.redhat.io'],
+                capture_output=True, text=True, timeout=5,
+            )
+            login_ok = r.returncode == 0
+            login_detail = r.stdout.strip() if login_ok else 'not logged in — run: podman login registry.redhat.io'
+        except Exception as exc:
+            login_ok, login_detail = False, str(exc)
+    else:
+        login_ok, login_detail = False, 'podman not found'
+    checks.append({'name': 'registry.redhat.io login', 'ok': login_ok, 'detail': login_detail})
+
+    return checks
+
+
+def run_build_job(job_id, script):
+    """Run a build script in a background thread, capturing output line by line."""
+    job = jobs[job_id]
+    script_path = f'/var/tmp/bootc-build-{job_id}.sh'
+    try:
+        with open(script_path, 'w') as fh:
+            fh.write(script)
+        os.chmod(script_path, 0o700)
+        proc = subprocess.Popen(
+            ['bash', script_path],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            stdin=subprocess.PIPE,
+            text=True,
+            bufsize=1,
+        )
+        # Satisfy the interactive dasdfmt confirmation prompt
+        proc.stdin.write('YES\n')
+        proc.stdin.flush()
+        proc.stdin.close()
+        for line in proc.stdout:
+            with job['lock']:
+                job['lines'].append(line.rstrip('\n'))
+        proc.wait()
+        with job['lock']:
+            job['done'] = True
+            job['rc'] = proc.returncode
+    except Exception as exc:
+        with job['lock']:
+            job['lines'].append(f'[server error] {exc}')
+            job['done'] = True
+            job['rc'] = 1
+    finally:
+        try:
+            os.unlink(script_path)
+        except OSError:
+            pass
 
 # ── Embedded HTML UI ──────────────────────────────────────────────────────────
 
@@ -301,6 +409,47 @@ PAGE = r"""<!DOCTYPE html>
     border-radius: 2px;
   }
 
+  /* ── Preflight panel ── */
+  .preflight-body { padding: 16px 20px; }
+
+  .preflight-item {
+    display: grid;
+    grid-template-columns: 18px 230px 1fr;
+    align-items: baseline;
+    gap: 0 12px;
+    padding: 5px 0;
+    border-bottom: 1px solid rgba(30,58,30,0.5);
+    font-size: 12px;
+  }
+  .preflight-item:last-child { border-bottom: none; }
+  .preflight-icon { font-size: 13px; font-weight: 700; text-align: center; }
+  .preflight-item.ok   .preflight-icon { color: var(--green); }
+  .preflight-item.fail .preflight-icon { color: var(--red); }
+  .preflight-item.ok   .preflight-name { color: var(--text); }
+  .preflight-item.fail .preflight-name { color: var(--red); }
+  .preflight-detail { color: var(--text-dim); font-family: var(--mono); word-break: break-all; }
+
+  .preflight-run-btn {
+    font-family: var(--mono);
+    font-size: 12px;
+    background: rgba(57,255,20,0.06);
+    color: var(--green);
+    border: 1px solid var(--green-dim);
+    border-radius: 2px;
+    padding: 4px 14px;
+    cursor: pointer;
+    letter-spacing: 0.06em;
+    transition: background 0.15s;
+  }
+  .preflight-run-btn:hover { background: rgba(57,255,20,0.18); }
+  .preflight-run-btn:disabled { opacity: 0.4; cursor: default; }
+
+  /* ── Build status badge ── */
+  .build-status { font-family: var(--mono); font-size: 12px; color: var(--text-dim); letter-spacing: 0.06em; }
+  .build-status.running { color: var(--amber); }
+  .build-status.done    { color: var(--green); }
+  .build-status.failed  { color: var(--red); }
+
   /* ── Generate button ── */
   .generate-wrap {
     display: flex;
@@ -343,6 +492,28 @@ PAGE = r"""<!DOCTYPE html>
   }
 
   button[type=submit]:hover::before { transform: scaleX(1); }
+
+  button.build-now {
+    font-family: var(--display);
+    font-size: 13px;
+    font-weight: 900;
+    letter-spacing: 0.2em;
+    text-transform: uppercase;
+    background: transparent;
+    color: var(--amber);
+    border: 2px solid rgba(255,183,0,0.35);
+    border-radius: 2px;
+    padding: 14px 48px;
+    cursor: pointer;
+    transition: color 0.2s, border-color 0.2s, background 0.2s, box-shadow 0.2s;
+  }
+  button.build-now:hover {
+    color: var(--bg);
+    border-color: var(--amber);
+    background: var(--amber);
+    box-shadow: 0 0 24px rgba(255,183,0,0.25);
+  }
+  button.build-now:disabled { opacity: 0.4; cursor: not-allowed; }
 
   /* ── Output script ── */
   .output-wrap {
@@ -435,10 +606,23 @@ PAGE = r"""<!DOCTYPE html>
 <header>
   <div class="header-label">IBM Z · RHEL 10 · Image Mode</div>
   <h1>bootc s390x Image Builder</h1>
-  <div class="subtitle">generates a complete build + dd deploy script for your LPAR</div>
+  <div class="subtitle">configure → pre-flight → generate script or build directly on this host</div>
 </header>
 
 <div class="container">
+
+<!-- ── Pre-flight checks ── -->
+<div class="section" style="margin-bottom:24px;">
+  <div class="section-header" style="justify-content:space-between;">
+    <div style="display:flex;align-items:center;gap:10px;">
+      <span class="section-num">✓</span>
+      <span class="section-title">Pre-flight Checks</span>
+    </div>
+    <button class="preflight-run-btn" id="preflight-btn" type="button" onclick="runPreflight()">[ run checks ]</button>
+  </div>
+  <div id="preflight-results" class="preflight-body" style="display:none;"></div>
+</div>
+
 <form method="POST" action="/generate" id="form">
 
   <!-- ── 01 Identity ── -->
@@ -600,8 +784,9 @@ PAGE = r"""<!DOCTYPE html>
     </div>
   </div>
 
-  <div class="generate-wrap">
+  <div class="generate-wrap" style="gap:14px;">
     <button type="submit">&#x25B6;&nbsp; Generate Script</button>
+    <button type="button" class="build-now" id="build-btn" onclick="buildNow()">⚙&nbsp; Build on This Host</button>
   </div>
 
 </form>
@@ -613,6 +798,15 @@ PAGE = r"""<!DOCTYPE html>
     <button class="copy-btn" onclick="copyScript()">[ copy ]</button>
   </div>
   <pre class="output-script" id="script-out">__SCRIPT_PLACEHOLDER__</pre>
+</div>
+
+<!-- ── Build terminal ── -->
+<div class="output-wrap" id="build-wrap">
+  <div class="output-header">
+    <span class="output-title">Build Output</span>
+    <span class="build-status" id="build-status"></span>
+  </div>
+  <pre class="output-script" id="build-out" style="white-space:pre-wrap;"></pre>
 </div>
 
 </div><!-- /container -->
@@ -647,6 +841,92 @@ function onFipsChange(el) {
 
 function onSelinuxChange(el) {
   document.getElementById('selinux-warn').style.display = el.value === 'disabled' ? 'block' : 'none';
+}
+
+async function runPreflight() {
+  var btn = document.getElementById('preflight-btn');
+  var results = document.getElementById('preflight-results');
+  btn.textContent = '[ checking... ]';
+  btn.disabled = true;
+  try {
+    var res = await fetch('/preflight');
+    var checks = await res.json();
+    results.innerHTML = checks.map(function(c) {
+      return '<div class="preflight-item ' + (c.ok ? 'ok' : 'fail') + '">' +
+        '<span class="preflight-icon">' + (c.ok ? '✓' : '✗') + '</span>' +
+        '<span class="preflight-name">' + c.name + '</span>' +
+        '<span class="preflight-detail">' + c.detail + '</span>' +
+        '</div>';
+    }).join('');
+    results.style.display = 'block';
+  } catch(e) {
+    results.innerHTML = '<div class="preflight-item fail">' +
+      '<span class="preflight-icon">✗</span>' +
+      '<span class="preflight-name">request failed</span>' +
+      '<span class="preflight-detail">' + e + '</span></div>';
+    results.style.display = 'block';
+  }
+  btn.textContent = '[ run checks ]';
+  btn.disabled = false;
+}
+
+async function buildNow() {
+  var btn = document.getElementById('build-btn');
+  var statusEl = document.getElementById('build-status');
+  var outEl = document.getElementById('build-out');
+  var wrap = document.getElementById('build-wrap');
+
+  btn.disabled = true;
+  btn.textContent = '⚙ Starting...';
+
+  var params = new URLSearchParams(new FormData(document.getElementById('form'))).toString();
+
+  try {
+    var res = await fetch('/build', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/x-www-form-urlencoded'},
+      body: params,
+    });
+    var data = await res.json();
+
+    wrap.classList.add('visible');
+    outEl.textContent = '';
+    statusEl.className = 'build-status running';
+    statusEl.textContent = 'running...';
+    wrap.scrollIntoView({behavior: 'smooth', block: 'start'});
+
+    var es = new EventSource('/stream/' + data.job_id);
+    es.onmessage = function(e) {
+      var msg = JSON.parse(e.data);
+      if (msg.done) {
+        es.close();
+        if (msg.rc === 0) {
+          statusEl.className = 'build-status done';
+          statusEl.textContent = '✓ complete';
+        } else {
+          statusEl.className = 'build-status failed';
+          statusEl.textContent = '✗ failed (rc=' + msg.rc + ')';
+        }
+        btn.disabled = false;
+        btn.textContent = '⚙ Build on This Host';
+      } else {
+        outEl.textContent += msg.line + '\n';
+        outEl.scrollTop = outEl.scrollHeight;
+      }
+    };
+    es.onerror = function() {
+      es.close();
+      statusEl.className = 'build-status failed';
+      statusEl.textContent = '✗ stream disconnected';
+      btn.disabled = false;
+      btn.textContent = '⚙ Build on This Host';
+    };
+  } catch(e) {
+    statusEl.className = 'build-status failed';
+    statusEl.textContent = '✗ ' + e;
+    btn.disabled = false;
+    btn.textContent = '⚙ Build on This Host';
+  }
 }
 </script>
 
@@ -1067,20 +1347,74 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(data)
 
     def do_GET(self):
-        if urlparse(self.path).path in ('/', '/index.html'):
+        path = urlparse(self.path).path
+        if path in ('/', '/index.html'):
             self.send_page()
+        elif path == '/preflight':
+            self.handle_preflight()
+        elif path.startswith('/stream/'):
+            self.handle_stream(path[len('/stream/'):])
         else:
             self.send_error(404)
 
     def do_POST(self):
-        if urlparse(self.path).path != '/generate':
-            self.send_error(404)
-            return
+        path   = urlparse(self.path).path
         length = int(self.headers.get('Content-Length', 0))
         raw    = self.rfile.read(length).decode('utf-8')
         params = parse_qs(raw)
-        script = generate_script(params)
-        self.send_page(script)
+        if path == '/generate':
+            self.send_page(generate_script(params))
+        elif path == '/build':
+            script = generate_script(params)
+            job_id = uuid.uuid4().hex[:8]
+            jobs[job_id] = {'lines': [], 'done': False, 'rc': None, 'lock': threading.Lock()}
+            threading.Thread(target=run_build_job, args=(job_id, script), daemon=True).start()
+            body = json.dumps({'job_id': job_id}).encode('utf-8')
+            self.send_response(200)
+            self.send_header('Content-Type', 'application/json')
+            self.send_header('Content-Length', str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+        else:
+            self.send_error(404)
+
+    def handle_preflight(self):
+        body = json.dumps(run_preflight()).encode('utf-8')
+        self.send_response(200)
+        self.send_header('Content-Type', 'application/json')
+        self.send_header('Content-Length', str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def handle_stream(self, job_id):
+        if job_id not in jobs:
+            self.send_error(404)
+            return
+        self.send_response(200)
+        self.send_header('Content-Type', 'text/event-stream')
+        self.send_header('Cache-Control', 'no-cache')
+        self.send_header('X-Accel-Buffering', 'no')
+        self.send_header('Connection', 'keep-alive')
+        self.end_headers()
+        job  = jobs[job_id]
+        sent = 0
+        try:
+            while True:
+                with job['lock']:
+                    lines = list(job['lines'])
+                    done  = job['done']
+                    rc    = job['rc']
+                while sent < len(lines):
+                    self.wfile.write(f'data: {json.dumps({"line": lines[sent]})}\n\n'.encode())
+                    self.wfile.flush()
+                    sent += 1
+                if done:
+                    self.wfile.write(f'data: {json.dumps({"done": True, "rc": rc})}\n\n'.encode())
+                    self.wfile.flush()
+                    break
+                time.sleep(0.1)
+        except (BrokenPipeError, ConnectionResetError):
+            pass  # client disconnected
 
 
 # ── Entry point ───────────────────────────────────────────────────────────────
@@ -1104,7 +1438,7 @@ if __name__ == '__main__':
 
     print(f"\n  Ctrl-C to stop\n")
     try:
-        HTTPServer((host, PORT), Handler).serve_forever()
+        ThreadingHTTPServer((host, PORT), Handler).serve_forever()
     except KeyboardInterrupt:
         print("\n  Stopped.")
         sys.exit(0)
