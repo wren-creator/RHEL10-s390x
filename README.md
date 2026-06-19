@@ -8,11 +8,13 @@ Build and deploy RHEL 10 image-mode OS images for IBM Z (s390x) — supporting L
 
 | Document | Purpose |
 |---|---|
+| [`Documentation/bootc-builder-server.md`](./Documentation/bootc-builder-server.md) | How-to guide for the web UI builder — prerequisites, form fields, pre-flight checks, generate vs build, troubleshooting |
+| [`Documentation/Deploy_Guide.md`](./Documentation/Deploy_Guide.md) | LPAR-specific deployment runbook — locked to this project's configuration (Podman/Linux, DASD, LVM, RAW image, britley user) |
 | [`RHEL10_bootc_s390x.md`](./RHEL10_bootc_s390x.md) | General reference guide — covers all environments, build options, VG/LVM setup, troubleshooting |
-| [`Deploy_Guide.md`](./Deploy_Guide.md) | LPAR-specific deployment runbook — locked to this project's configuration (Podman/Linux, DASD, LVM, RAW image, britley user) |
 
-**Start with `Deploy_Guide.md`** if you're deploying to the LPAR environment this repo was built for.  
-**Use `RHEL10_bootc_s390x.md`** as a reference for anything not covered in the runbook, or if adapting this for a different environment (KVM, ZD&T, Windows build host, etc.).
+**Start with `bootc-builder-server.md`** to get the web UI running and generate your first build script.  
+**Use `Deploy_Guide.md`** for the full LPAR deployment runbook after you have a RAW image.  
+**Use `RHEL10_bootc_s390x.md`** as a reference for anything not covered in the runbooks, or when adapting for a different environment (KVM, ZD&T, Windows build host, etc.).
 
 ---
 
