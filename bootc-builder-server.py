@@ -180,69 +180,67 @@ def run_engine_job(job_id, arch):
 
 
 def run_preflight():
-    """Check build host readiness. Returns list of {name, ok, detail} dicts."""
+    """Check build host readiness.
+
+    Returns a list of {name, level, ok, detail} dicts. `level` is 'ok' | 'warn' |
+    'fail'; `ok` (bool) is kept for backwards-compatibility (ok == level != 'fail').
+    Entitlement-related checks are advisory (warn) — a non-RHEL cross-build host will
+    never have them natively, and they only matter if you install RHEL-CDN packages.
+    """
     import socket as _socket
     checks = []
 
+    def add(name, level, detail):
+        checks.append({'name': name, 'level': level, 'ok': level != 'fail', 'detail': detail})
+
     engine = detect_engine()
     engine_path = shutil.which(engine) if engine else None
-    checks.append({
-        'name': 'container engine',
-        'ok': engine is not None,
-        'detail': f'{engine} — {engine_path}' if engine else 'neither docker nor podman found',
-    })
+    add('container engine',
+        'ok' if engine else 'fail',
+        f'{engine} — {engine_path}' if engine else 'neither docker nor podman found')
 
     host_arch = detect_native_arch()
-    checks.append({
-        'name': 'host architecture',
-        'ok': True,
-        'detail': (f'{host_arch} — native s390x builds run without emulation'
-                   if host_arch == 's390x'
-                   else f'{host_arch} — s390x targets cross-compile under QEMU'),
-    })
+    is_native = (host_arch == 's390x')
+    add('host architecture', 'ok',
+        f'{host_arch} — native s390x builds run without emulation' if is_native
+        else f'{host_arch} — s390x targets cross-compile under QEMU')
 
-    if host_arch != 's390x':
+    if not is_native:
         emu_ok = _binfmt_registered('s390x')
-        checks.append({
-            'name': 'QEMU s390x emulation',
-            'ok': emu_ok,
-            'detail': ('binfmt qemu-s390x registered'
-                       if emu_ok else 'not registered — click "Prepare Build Engine"'),
-        })
+        add('QEMU s390x emulation',
+            'ok' if emu_ok else 'warn',
+            'binfmt qemu-s390x registered' if emu_ok
+            else 'not registered — click "Prepare Build Engine"')
 
+    # Entitlement checks are advisory. On a non-RHEL host they are never present
+    # natively; they only gate RHEL-CDN package installs during an entitled build.
+    advisory = ' (only needed for entitled builds — copy certs in, see runbook §2)'
     ent_dir = '/etc/pki/entitlement'
     try:
         pems = [f for f in os.listdir(ent_dir) if f.endswith('.pem')]
-        ent_ok = len(pems) > 0
-        ent_detail = f'{len(pems)} cert(s) found' if ent_ok else 'empty — run subscription-manager register'
+        add('RHEL entitlement certs',
+            'ok' if pems else 'warn',
+            f'{len(pems)} cert(s) found' if pems else f'none in {ent_dir}{advisory}')
     except FileNotFoundError:
-        ent_ok, ent_detail = False, f'{ent_dir} missing — run subscription-manager register'
-    checks.append({'name': 'RHEL entitlement certs', 'ok': ent_ok, 'detail': ent_detail})
+        add('RHEL entitlement certs', 'warn', f'{ent_dir} not present{advisory}')
 
     rhsm_ok = os.path.isfile('/etc/rhsm/rhsm.conf')
-    checks.append({
-        'name': '/etc/rhsm config',
-        'ok': rhsm_ok,
-        'detail': 'present' if rhsm_ok else 'missing — system may not be subscribed',
-    })
+    add('/etc/rhsm config', 'ok' if rhsm_ok else 'warn',
+        'present' if rhsm_ok else f'not present{advisory}')
 
     repo_ok = os.path.isfile('/etc/yum.repos.d/redhat.repo')
-    checks.append({
-        'name': 'redhat.repo',
-        'ok': repo_ok,
-        'detail': 'present' if repo_ok else 'missing — run subscription-manager refresh',
-    })
+    add('redhat.repo', 'ok' if repo_ok else 'warn',
+        'present' if repo_ok else f'not present{advisory}')
 
     try:
         sock = _socket.create_connection(('registry.redhat.io', 443), timeout=5)
         sock.close()
-        reg_ok, reg_detail = True, 'reachable'
+        add('registry.redhat.io reachable', 'ok', 'reachable')
     except Exception as exc:
-        reg_ok, reg_detail = False, str(exc)
-    checks.append({'name': 'registry.redhat.io reachable', 'ok': reg_ok, 'detail': reg_detail})
+        add('registry.redhat.io reachable', 'fail', str(exc))
 
     login_ok, login_detail = _check_registry_login(engine)
-    checks.append({'name': 'registry.redhat.io login', 'ok': login_ok, 'detail': login_detail})
+    add('registry.redhat.io login', 'ok' if login_ok else 'fail', login_detail)
 
     return checks
 
@@ -652,8 +650,10 @@ PAGE = r"""<!DOCTYPE html>
   .preflight-item:last-child { border-bottom: none; }
   .preflight-icon { font-size: 13px; font-weight: 700; text-align: center; }
   .preflight-item.ok   .preflight-icon { color: var(--green); }
+  .preflight-item.warn .preflight-icon { color: var(--amber); }
   .preflight-item.fail .preflight-icon { color: var(--red); }
   .preflight-item.ok   .preflight-name { color: var(--text); }
+  .preflight-item.warn .preflight-name { color: var(--amber); }
   .preflight-item.fail .preflight-name { color: var(--red); }
   .preflight-detail { color: var(--text-dim); font-family: var(--mono); word-break: break-all; }
 
@@ -1329,9 +1329,11 @@ async function runPreflight() {
   try {
     var res = await fetch('/preflight');
     var checks = await res.json();
+    var ICON = {ok: '✓', warn: '⚠', fail: '✗'};
     results.innerHTML = checks.map(function(c) {
-      return '<div class="preflight-item ' + (c.ok ? 'ok' : 'fail') + '">' +
-        '<span class="preflight-icon">' + (c.ok ? '✓' : '✗') + '</span>' +
+      var level = c.level || (c.ok ? 'ok' : 'fail');
+      return '<div class="preflight-item ' + level + '">' +
+        '<span class="preflight-icon">' + (ICON[level] || '?') + '</span>' +
         '<span class="preflight-name">' + c.name + '</span>' +
         '<span class="preflight-detail">' + c.detail + '</span>' +
         '</div>';
@@ -1420,9 +1422,9 @@ async function refreshEngineBadge() {
   var badge = document.getElementById('engine-badge');
   try {
     var checks = await (await fetch('/preflight')).json();
-    var find = function(n) { var c = checks.find(function(x){return x.name===n;}); return c ? c.detail : ''; };
-    var engine = (find('container engine').split(' ')[0]) || '?';
-    var hostArch = (find('host architecture').split(' ')[0]) || '?';
+    var get = function(n) { return checks.find(function(x){return x.name===n;}) || {detail:'', level:'fail'}; };
+    var engine = (get('container engine').detail.split(' ')[0]) || '?';
+    var hostArch = (get('host architecture').detail.split(' ')[0]) || '?';
     var native = (hostArch === 's390x');
     badge.classList.remove('native', 'cross');
     if (native) {
@@ -1430,8 +1432,7 @@ async function refreshEngineBadge() {
       badge.textContent = engine + ' · native ' + hostArch;
     } else {
       badge.classList.add('cross');
-      var emu = find('QEMU s390x emulation');
-      var emuOk = emu.indexOf('registered') === 0;
+      var emuOk = get('QEMU s390x emulation').level === 'ok';
       badge.textContent = engine + ' · cross · qemu ' + (emuOk ? '✓' : '✗');
     }
   } catch(e) {
