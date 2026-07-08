@@ -31,6 +31,7 @@ IBM Z host (DASD)   ←──────── dasdfmt / fdasd / dd / zipl  ◄
 | Document | Purpose |
 |---|---|
 | [`Documentation/bootc-builder-server.md`](./Documentation/bootc-builder-server.md) | How-to for the Studio web app — engine prep, form fields, pre-flight, build & download |
+| [`Documentation/Windows_Validation_Runbook.md`](./Documentation/Windows_Validation_Runbook.md) | **Phase A** validation on Windows / Docker Desktop — engine prep → cross-build → RAW → download, plus the entitlement strategy |
 | [`Documentation/Deploy_Guide.md`](./Documentation/Deploy_Guide.md) | **Phase B** runbook — writing the RAW to DASD and IPL on IBM Z (Podman/LVM/RAW reference config) |
 | [`RHEL10_bootc_s390x.md`](./RHEL10_bootc_s390x.md) | General reference — all environments, build options, VG/LVM setup, troubleshooting |
 
