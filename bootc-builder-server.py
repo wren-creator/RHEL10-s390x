@@ -1719,7 +1719,7 @@ SVCEOF
         firstboot_containerfile = """# First-boot LVM automation
 COPY scripts/firstboot-lvm.sh /usr/local/sbin/firstboot-lvm.sh
 COPY systemd/firstboot-lvm.service /etc/systemd/system/firstboot-lvm.service
-RUN chmod 0755 /usr/local/sbin/firstboot-lvm.sh \\\\
+RUN chmod 0755 /usr/local/sbin/firstboot-lvm.sh \\
     && systemctl enable firstboot-lvm.service"""
     else:
         fstab_content = "LABEL=rootfs / xfs defaults 0 0"
