@@ -1,6 +1,28 @@
-# RHEL 10 bootc for IBM Z (s390x)
+# RHEL 10 · Image Mode Studio (s390x)
 
-Build and deploy RHEL 10 image-mode OS images for IBM Z (s390x) — supporting LPAR, KVM, and ZD&T environments.
+A web-driven studio that builds RHEL 10 image-mode OS images for IBM Z (s390x) and
+hands you a **downloadable RAW disk image** ready to `dd` onto a DASD — supporting LPAR,
+KVM, and ZD&T environments.
+
+## The two-phase model
+
+You cannot write to a DASD from a Windows/x86 build host, so the workflow splits cleanly:
+
+- **Phase A — Build (any host).** The web app (`bootc-builder-server.py`) assembles a
+  Containerfile from point-and-click choices, cross-compiles the s390x image under QEMU
+  (auto-detecting **docker/buildx** or **podman**), runs `bootc-image-builder`, and
+  produces a **RAW image you download from the browser**. On a native s390x host it skips
+  emulation. This is where the app's job ends.
+- **Phase B — Deploy (IBM Z host).** You take the downloaded RAW to a Linux-on-Z host
+  with the DASD attached and run `dasdfmt` → `fdasd` → `dd` → `zipl`. The app never
+  touches a physical DASD; the exact commands are generated for you (with your DASD
+  addresses) in the script's `PHASE B` block and documented in the Deploy Guide.
+
+```
+Windows / x86 / z   →  build s390x image  →  RAW file  →  [ Download ]
+                                                              │
+IBM Z host (DASD)   ←──────── dasdfmt / fdasd / dd / zipl  ◄──┘   (Phase B, manual)
+```
 
 ---
 
@@ -8,13 +30,13 @@ Build and deploy RHEL 10 image-mode OS images for IBM Z (s390x) — supporting L
 
 | Document | Purpose |
 |---|---|
-| [`Documentation/bootc-builder-server.md`](./Documentation/bootc-builder-server.md) | How-to guide for the web UI builder — prerequisites, form fields, pre-flight checks, generate vs build, troubleshooting |
-| [`Documentation/Deploy_Guide.md`](./Documentation/Deploy_Guide.md) | LPAR-specific deployment runbook — locked to this project's configuration (Podman/Linux, DASD, LVM, RAW image, britley user) |
-| [`RHEL10_bootc_s390x.md`](./RHEL10_bootc_s390x.md) | General reference guide — covers all environments, build options, VG/LVM setup, troubleshooting |
+| [`Documentation/bootc-builder-server.md`](./Documentation/bootc-builder-server.md) | How-to for the Studio web app — engine prep, form fields, pre-flight, build & download |
+| [`Documentation/Deploy_Guide.md`](./Documentation/Deploy_Guide.md) | **Phase B** runbook — writing the RAW to DASD and IPL on IBM Z (Podman/LVM/RAW reference config) |
+| [`RHEL10_bootc_s390x.md`](./RHEL10_bootc_s390x.md) | General reference — all environments, build options, VG/LVM setup, troubleshooting |
 
-**Start with `bootc-builder-server.md`** to get the web UI running and generate your first build script.  
-**Use `Deploy_Guide.md`** for the full LPAR deployment runbook after you have a RAW image.  
-**Use `RHEL10_bootc_s390x.md`** as a reference for anything not covered in the runbooks, or when adapting for a different environment (KVM, ZD&T, Windows build host, etc.).
+**Start with `bootc-builder-server.md`** to run the Studio and download your first RAW image (Phase A).  
+**Use `Deploy_Guide.md`** for the DASD write and IPL once you have the image (Phase B).  
+**Use `RHEL10_bootc_s390x.md`** as a reference for other environments (KVM, ZD&T) or manual builds.
 
 ---
 
@@ -47,7 +69,36 @@ Build and deploy RHEL 10 image-mode OS images for IBM Z (s390x) — supporting L
 
 ---
 
-## Quick Start
+## Quick Start — the Studio (Phase A)
+
+Run the web app on your build host (Windows/Docker Desktop, x86 Linux, or native s390x):
+
+```bash
+podman login registry.redhat.io        # or: docker login registry.redhat.io
+python3 bootc-builder-server.py        # → open http://<host-ip>:8080
+```
+
+In the browser:
+
+1. **Run pre-flight checks** — confirms the container engine, host arch, and (for
+   cross-builds) whether QEMU s390x emulation is registered.
+2. **Prepare Build Engine** — one click self-heals the `binfmt`/`buildx` layer so an
+   x86/ARM host can build s390x. Native s390x hosts skip this.
+3. **Configure** — architecture, admin user + SSH key, DASD/qeth, storage, security.
+4. **Build Image** — streams live logs; on success a **Download** button appears with the
+   RAW image. (Or **Generate Script** to run the same build yourself.)
+
+Then continue with **Phase B** ([`Deploy_Guide.md`](./Documentation/Deploy_Guide.md)) on the Z host.
+
+> **Cross-build note:** on a non-RHEL host (e.g. Windows), host entitlement certs
+> (`/etc/pki/entitlement`) don't exist, so they aren't mounted into the build. Layers that
+> `dnf install` from the RHEL CDN need an entitlement strategy (a subscribed builder, or a
+> registry pull secret). Packages already present in `rhel-bootc` build fine. Validate this
+> on your actual build host.
+
+---
+
+## Manual build (reference)
 
 ### Prerequisites
 

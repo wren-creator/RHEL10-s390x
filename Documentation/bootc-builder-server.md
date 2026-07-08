@@ -1,6 +1,8 @@
 # bootc Image Builder — Web UI How-To
 
-`bootc-builder-server.py` is a self-contained Python web server that runs on your Linux build host. It serves a browser-based form for configuring a RHEL 10 bootc image, then either generates a ready-to-run shell script or executes the build directly on the host with live streaming output.
+`bootc-builder-server.py` is a self-contained Python web server — the **Image Mode Studio**. It runs on any build host (Windows/Docker Desktop, x86 Linux, or native s390x), serves a browser-based form for configuring a RHEL 10 bootc image, cross-compiles the s390x image under QEMU (auto-detecting **docker/buildx** or **podman**), and produces a **RAW image you download from the browser**.
+
+This is **Phase A** of the two-phase workflow described in the [README](../README.md): the app builds and hands you the image file. Writing that image to a DASD (`dasdfmt`/`fdasd`/`dd`/`zipl`) is **Phase B**, run manually on the IBM Z host — see [`Deploy_Guide.md`](./Deploy_Guide.md). The app never writes to a physical DASD.
 
 ---
 
@@ -11,11 +13,13 @@
 | Requirement | Notes |
 |---|---|
 | Python 3.6+ | Ships with RHEL 9/10 — no extra packages needed |
-| `podman` | `dnf install -y podman` |
-| RHEL subscription | `subscription-manager register` |
-| `/etc/pki/entitlement` certs | Populated after registration |
-| `registry.redhat.io` login | `podman login registry.redhat.io` |
-| Root or passwordless sudo | Required to run the generated script |
+| Container engine | `docker` **or** `podman` — auto-detected |
+| RHEL subscription | Native/RHEL host: `subscription-manager register`. Cross-build host: a registry pull secret (see note below) |
+| `/etc/pki/entitlement` certs | Native/RHEL host only — mounted into the build. Absent on cross-build hosts |
+| `registry.redhat.io` login | `podman login registry.redhat.io` (or `docker login …`) |
+| Root or passwordless sudo | Required to run the generated script and prepare the engine |
+
+> **Cross-build entitlements:** on a non-RHEL host, host entitlement certs don't exist and aren't mounted. Layers that `dnf install` from the RHEL CDN then need a subscribed builder or a registry pull secret; packages already in `rhel-bootc` build fine.
 
 For s390x cross-builds from an x86_64 host, also install:
 
@@ -50,8 +54,8 @@ The server keeps running until you `Ctrl+C` it. It handles multiple browser conn
 ## Workflow overview
 
 ```
-Pre-flight checks → Configure form → Generate Script  →  copy & run manually
-                                   → Build on This Host →  live output in browser
+Pre-flight → Prepare Build Engine → Configure → Generate Script → copy & run manually
+                                              → Build Image      → live logs → Download RAW
 ```
 
 ---
@@ -117,12 +121,12 @@ The admin password is set to `Ch@ngeMe1st!` and expires on first login. You will
 
 | Field | Description |
 |---|---|
-| Boot DASD address | CCW bus address of the DASD to boot from (e.g. `0.0.0200`). Written to `/etc/dasd.conf` and `zipl.conf`. |
-| DD target DASD device | Block device path for the DASD (e.g. `/dev/dasda`). This is what the RAW image gets `dd`'d to. |
+| Boot DASD address | CCW bus address of the DASD to boot from (e.g. `0.0.0200`). Written to `/etc/dasd.conf`, `zipl.conf`, and the Phase B deploy snippet. |
+| DD target DASD device | Block device path for the DASD (e.g. `/dev/dasda`). Used in the **Phase B** snippet — where you'll `dd` the RAW on the Z host. Nothing is written to a DASD on the build host. |
 | Storage layout | **LVM** creates two logical volumes: `root` (40 GB) and `var` (20 GB) on first boot. **Single XFS** uses one partition with `LABEL=rootfs`. |
 | LVM volume group name | Name of the VG created during first boot (default: `rhelvg`). Used in `fstab` and zipl kernel parameters. |
 
-> **Warning:** The DD target DASD will be fully overwritten. The script prompts `Type YES to continue` before `dasdfmt` runs.
+> **Warning:** These addresses configure the image and the **Phase B** snippet only — the build host writes nothing to a DASD. On the Z host in Phase B, `dasdfmt` fully erases the target DASD.
 
 #### x86_64 / aarch64 — Storage
 
@@ -187,15 +191,27 @@ chmod +x build-and-deploy.sh
 sudo ./build-and-deploy.sh
 ```
 
-### ⚙ Build on This Host
+### ⚙ Build Image
 
-Runs the build directly on the machine serving this page. Output streams live into the **Build Output** terminal panel in the browser.
+Runs the build on the machine serving this page. Output streams live into the **Build
+Output — Phase A** terminal panel. On success, a **Download** button appears with the RAW
+image; each build's artifacts are isolated per job so downloads never collide.
 
 - The build runs in the background — you can navigate away and return without losing output (as long as the server stays running)
 - The button is disabled while a build is in progress
 - Exit code is shown when the build completes (`✓ complete` or `✗ failed (rc=N)`)
+- The download streams the image in 1 MiB chunks, so multi-GB RAW files transfer fine
 
-> The "Build on This Host" button only makes sense when you are accessing the server from a machine that **is** the build host (i.e. `http://localhost:8080` or same machine). If you open the UI from a remote workstation, use Generate Script instead.
+Once downloaded, continue with **Phase B** ([`Deploy_Guide.md`](./Deploy_Guide.md)) on the Z host.
+
+### Prepare Build Engine
+
+Before building on a non-s390x host, click **Prepare Build Engine**. It self-heals the QEMU
+emulation layer (idempotent — re-running when already set up makes no changes):
+
+- **docker:** ensures an isolated `docker-container` buildx builder registers `linux/s390x` (installs `tonistiigi/binfmt` if needed)
+- **podman:** registers `multiarch/qemu-user-static` binfmt handlers if `qemu-s390x` isn't present
+- **native s390x:** no-op — emulation isn't needed
 
 ---
 
@@ -203,15 +219,14 @@ Runs the build directly on the machine serving this page. Output streams live in
 
 | Step | Action |
 |---|---|
-| 0 | Pre-flight: checks for podman, root, and target block device |
-| 1 | `podman login registry.redhat.io` |
+| 0 | Pre-flight: checks the detected engine (`$ENGINE`), root, and build mode (native/cross) |
+| 1 | `$ENGINE login registry.redhat.io` |
 | 2 | Writes all build context files (dracut config, network config, fstab, authorized_keys, and optionally dasd.conf, zipl.conf, firstboot-lvm.sh) |
 | 3 | Writes the Containerfile into the build context |
-| 4 | `podman build --platform linux/<arch>` |
-| 5 | `podman run bootc-image-builder --type <format> --target-arch <arch>` |
-| 6–9 | **s390x RAW only:** DASD bring-online → dasdfmt → dd → zipl |
-| 6 | **x86_64/aarch64 RAW only:** dd image to target disk |
-| — | **Non-RAW:** prints output file location |
+| 4 | Builds the image — `docker buildx build --platform linux/<arch> --load` or `podman build --platform linux/<arch>` (entitlement certs mounted only in native/RHEL mode) |
+| 5 | `$ENGINE run bootc-image-builder --type <format> --target-arch <arch>` |
+| 6 | Prints the output image path + `ARTIFACT_PATH=…` (used by the Download button) |
+| — | Appends a **PHASE B** comment block (dasdfmt → fdasd → dd → zipl) for the Z host — **not executed here** |
 
 ---
 

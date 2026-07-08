@@ -1,6 +1,6 @@
-# RHEL 10 bootc s390x — Deployment Guide
+# RHEL 10 bootc s390x — Deployment Guide (Phase B)
 
-> **Scope:** This guide covers everything that happens *after* your `build-and-deploy.sh` has produced a RAW disk image. It assumes the image was built with Podman on Linux targeting IBM Z LPAR with LVM on DASD and a RAW output format.
+> **Scope:** This is **Phase B** of the [Image Mode Studio](../README.md) workflow — everything that happens *after* you download the RAW image from the Studio (Phase A). Run these steps on the IBM Z host with the DASD attached. It assumes an LPAR target with LVM on DASD and a RAW output format. The Studio also emits these exact commands (with your DASD addresses) in the generated script's `PHASE B` block.
 
 ---
 

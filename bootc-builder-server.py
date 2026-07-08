@@ -11,6 +11,8 @@ from urllib.parse import parse_qs, urlparse
 import html
 import json
 import os
+import platform
+import shutil
 import subprocess
 import sys
 import threading
@@ -19,21 +21,186 @@ import uuid
 
 PORT = 8080
 
-jobs = {}  # job_id → {'lines': [], 'done': False, 'rc': None, 'lock': Lock}
+# Name of the isolated buildx builder used for cross-arch (docker path).
+BUILDX_BUILDER_NAME = "mainframe-builder"
+# Where per-build RAW/image artifacts are written (one subdir per job).
+OUTPUT_ROOT = "/var/tmp/bootc-output"
+
+jobs = {}  # job_id → {'lines': [], 'done': False, 'rc': None, 'artifact': None, ...}
+
+
+# ── Infrastructure Automation Engine ──────────────────────────────────────────
+# Cross-compiling s390x on a non-Z host needs QEMU binfmt emulation. These helpers
+# detect the host/engine and self-heal the emulation layer (spec milestone 1).
+
+def detect_engine():
+    """Return the preferred container engine name: 'docker', 'podman', or None."""
+    for eng in ('docker', 'podman'):
+        if shutil.which(eng):
+            return eng
+    return None
+
+
+def detect_native_arch():
+    """Host machine architecture, e.g. 's390x', 'x86_64', 'aarch64'."""
+    return platform.machine()
+
+
+def build_mode_for(arch):
+    """'native' when the host already is the target arch, else 'cross'."""
+    return 'native' if detect_native_arch() == arch else 'cross'
+
+
+def _binfmt_registered(target):
+    """True if a QEMU binfmt handler for the target arch is installed."""
+    return os.path.exists(f'/proc/sys/fs/binfmt_misc/qemu-{target}')
+
+
+def _run_streamed(cmd, emit):
+    """Run cmd, emit each stdout/stderr line, return the exit code."""
+    emit(f"$ {' '.join(cmd)}")
+    try:
+        proc = subprocess.Popen(
+            cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+            text=True, bufsize=1,
+        )
+        for line in proc.stdout:
+            emit(line.rstrip('\n'))
+        proc.wait()
+        return proc.returncode
+    except FileNotFoundError as exc:
+        emit(f"[error] {exc}")
+        return 127
+
+
+def ensure_build_engine(engine, arch, emit):
+    """Idempotent, self-healing setup of the cross-compile build engine.
+
+    Modeled on the spec's enforce_mainframe_infrastructure(). Emits progress
+    lines via emit(line). Returns True when the engine is ready to build `arch`.
+    """
+    mode = build_mode_for(arch)
+    emit(f"[infra] target arch : {arch}")
+    emit(f"[infra] host arch   : {detect_native_arch()}")
+    emit(f"[infra] engine      : {engine or 'none found'}")
+    emit(f"[infra] build mode  : {mode}")
+
+    if mode == 'native':
+        emit("[infra] Native architecture — no QEMU emulation required.")
+        emit("[infra] Platform state optimal. Builder ready.")
+        return True
+
+    if engine is None:
+        emit("[infra] No container engine found — install docker or podman first.")
+        return False
+
+    if engine == 'docker':
+        return _ensure_docker_buildx(arch, emit)
+    return _ensure_podman_binfmt(arch, emit)
+
+
+def _ensure_docker_buildx(arch, emit):
+    """Ensure an isolated docker-container buildx builder registers linux/<arch>."""
+    platform_tag = f"linux/{arch}"
+    check = subprocess.run(
+        ['docker', 'buildx', 'inspect', BUILDX_BUILDER_NAME],
+        capture_output=True, text=True,
+    )
+    if platform_tag in check.stdout:
+        emit(f"[infra] buildx '{BUILDX_BUILDER_NAME}' already registers {platform_tag} — no change.")
+        return True
+
+    emit(f"[infra] Realignment required — registering {platform_tag} execution layer...")
+    subprocess.run(['docker', 'buildx', 'rm', BUILDX_BUILDER_NAME],
+                   capture_output=True, text=True)
+    steps = [
+        ['docker', 'run', '--privileged', '--rm', 'tonistiigi/binfmt', '--install', 'all'],
+        ['docker', 'buildx', 'create', '--name', BUILDX_BUILDER_NAME,
+         '--driver', 'docker-container', '--use'],
+        ['docker', 'buildx', 'inspect', '--bootstrap'],
+    ]
+    for cmd in steps:
+        rc = _run_streamed(cmd, emit)
+        if rc != 0:
+            emit(f"[infra] Step failed (rc={rc}) — aborting engine prep.")
+            return False
+    emit("[infra] Mainframe cross-compilation layer established.")
+    return True
+
+
+def _ensure_podman_binfmt(arch, emit):
+    """Ensure QEMU binfmt handlers are registered for podman cross-builds."""
+    if _binfmt_registered(arch):
+        emit(f"[infra] binfmt handler qemu-{arch} already registered — no change.")
+        return True
+
+    emit(f"[infra] Registering QEMU binfmt handlers for {arch}...")
+    rc = _run_streamed(
+        ['podman', 'run', '--rm', '--privileged',
+         'multiarch/qemu-user-static', '--reset', '-p', 'yes'],
+        emit,
+    )
+    if rc != 0:
+        emit(f"[infra] binfmt registration failed (rc={rc}).")
+        return False
+    if _binfmt_registered(arch):
+        emit(f"[infra] qemu-{arch} now registered. Builder ready.")
+        return True
+    emit(f"[infra] Warning: qemu-{arch} still not visible after registration.")
+    return False
+
+
+def run_engine_job(job_id, arch):
+    """Streamed job wrapper around ensure_build_engine() for the web UI."""
+    job = jobs[job_id]
+
+    def emit(line):
+        with job['lock']:
+            job['lines'].append(line)
+
+    try:
+        engine = detect_engine()
+        ok = ensure_build_engine(engine, arch, emit)
+        with job['lock']:
+            job['done'] = True
+            job['rc'] = 0 if ok else 1
+    except Exception as exc:
+        with job['lock']:
+            job['lines'].append(f'[server error] {exc}')
+            job['done'] = True
+            job['rc'] = 1
 
 
 def run_preflight():
     """Check build host readiness. Returns list of {name, ok, detail} dicts."""
-    import shutil
     import socket as _socket
     checks = []
 
-    podman_path = shutil.which('podman')
+    engine = detect_engine()
+    engine_path = shutil.which(engine) if engine else None
     checks.append({
-        'name': 'podman installed',
-        'ok': podman_path is not None,
-        'detail': podman_path or 'not found — dnf install podman',
+        'name': 'container engine',
+        'ok': engine is not None,
+        'detail': f'{engine} — {engine_path}' if engine else 'neither docker nor podman found',
     })
+
+    host_arch = detect_native_arch()
+    checks.append({
+        'name': 'host architecture',
+        'ok': True,
+        'detail': (f'{host_arch} — native s390x builds run without emulation'
+                   if host_arch == 's390x'
+                   else f'{host_arch} — s390x targets cross-compile under QEMU'),
+    })
+
+    if host_arch != 's390x':
+        emu_ok = _binfmt_registered('s390x')
+        checks.append({
+            'name': 'QEMU s390x emulation',
+            'ok': emu_ok,
+            'detail': ('binfmt qemu-s390x registered'
+                       if emu_ok else 'not registered — click "Prepare Build Engine"'),
+        })
 
     ent_dir = '/etc/pki/entitlement'
     try:
@@ -66,25 +233,43 @@ def run_preflight():
         reg_ok, reg_detail = False, str(exc)
     checks.append({'name': 'registry.redhat.io reachable', 'ok': reg_ok, 'detail': reg_detail})
 
-    if podman_path:
+    if engine:
         try:
             r = subprocess.run(
-                ['podman', 'login', '--get-login', 'registry.redhat.io'],
+                [engine, 'login', '--get-login', 'registry.redhat.io'],
                 capture_output=True, text=True, timeout=5,
             )
             login_ok = r.returncode == 0
-            login_detail = r.stdout.strip() if login_ok else 'not logged in — run: podman login registry.redhat.io'
+            login_detail = (r.stdout.strip() if login_ok
+                            else f'not logged in — run: {engine} login registry.redhat.io')
         except Exception as exc:
             login_ok, login_detail = False, str(exc)
     else:
-        login_ok, login_detail = False, 'podman not found'
+        login_ok, login_detail = False, 'no container engine found'
     checks.append({'name': 'registry.redhat.io login', 'ok': login_ok, 'detail': login_detail})
 
     return checks
 
 
-def run_build_job(job_id, script):
-    """Run a build script in a background thread, capturing output line by line."""
+def _find_artifact(out_dir, fmt):
+    """Locate the produced image file (bootc-image-builder may nest it in subdirs)."""
+    matches = []
+    for root, _dirs, files in os.walk(out_dir):
+        for name in files:
+            if name.endswith(f'.{fmt}'):
+                matches.append(os.path.join(root, name))
+    if not matches:
+        return None
+    # Newest by mtime wins.
+    return max(matches, key=lambda p: os.path.getmtime(p))
+
+
+def run_build_job(job_id, script, out_dir, fmt):
+    """Run a build script in a background thread, capturing output line by line.
+
+    On success, records the produced image path so it can be downloaded. The
+    script also prints an `ARTIFACT_PATH=...` sentinel we prefer over scanning.
+    """
     job = jobs[job_id]
     script_path = f'/var/tmp/bootc-build-{job_id}.sh'
     try:
@@ -95,21 +280,27 @@ def run_build_job(job_id, script):
             ['bash', script_path],
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
-            stdin=subprocess.PIPE,
             text=True,
             bufsize=1,
         )
-        # Satisfy the interactive dasdfmt confirmation prompt
-        proc.stdin.write('YES\n')
-        proc.stdin.flush()
-        proc.stdin.close()
+        artifact = None
         for line in proc.stdout:
+            line = line.rstrip('\n')
+            if line.startswith('ARTIFACT_PATH='):
+                candidate = line.split('=', 1)[1].strip()
+                if candidate and os.path.isfile(candidate):
+                    artifact = candidate
             with job['lock']:
-                job['lines'].append(line.rstrip('\n'))
+                job['lines'].append(line)
         proc.wait()
+        if artifact is None:
+            artifact = _find_artifact(out_dir, fmt)
         with job['lock']:
             job['done'] = True
             job['rc'] = proc.returncode
+            if proc.returncode == 0 and artifact:
+                job['artifact'] = artifact
+                job['artifact_name'] = os.path.basename(artifact)
     except Exception as exc:
         with job['lock']:
             job['lines'].append(f'[server error] {exc}')
@@ -128,7 +319,7 @@ PAGE = r"""<!DOCTYPE html>
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>RHEL 10 bootc · s390x Image Builder</title>
+<title>RHEL 10 · Image Mode Studio</title>
 <style>
   @import url('https://fonts.googleapis.com/css2?family=Share+Tech+Mono&family=Orbitron:wght@600;900&display=swap');
 
@@ -450,6 +641,48 @@ PAGE = r"""<!DOCTYPE html>
   .build-status.done    { color: var(--green); }
   .build-status.failed  { color: var(--red); }
 
+  /* ── Engine badge ── */
+  .engine-badge {
+    font-family: var(--mono);
+    font-size: 10px;
+    letter-spacing: 0.08em;
+    color: var(--text-dim);
+    border: 1px solid var(--border);
+    border-radius: 2px;
+    padding: 2px 8px;
+  }
+  .engine-badge.native { color: var(--green); border-color: var(--green-dim); }
+  .engine-badge.cross  { color: var(--amber); border-color: rgba(255,183,0,0.35); }
+
+  /* ── Deliverable / download ── */
+  .deliverable {
+    border: 1px solid var(--green-dim);
+    border-top: none;
+    border-radius: 0 0 2px 2px;
+    background: rgba(57,255,20,0.04);
+    padding: 18px 24px;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    align-items: flex-start;
+  }
+  a.download-btn {
+    font-family: var(--display);
+    font-size: 13px;
+    font-weight: 900;
+    letter-spacing: 0.16em;
+    text-transform: uppercase;
+    text-decoration: none;
+    color: var(--bg);
+    background: var(--green);
+    border: 2px solid var(--green);
+    border-radius: 2px;
+    padding: 12px 40px;
+    box-shadow: 0 0 24px var(--green-glow);
+    transition: box-shadow 0.2s, transform 0.1s;
+  }
+  a.download-btn:hover { box-shadow: 0 0 36px rgba(57,255,20,0.4); transform: translateY(-1px); }
+
   /* ── Generate button ── */
   .generate-wrap {
     display: flex;
@@ -653,9 +886,9 @@ PAGE = r"""<!DOCTYPE html>
 <body>
 
 <header>
-  <div class="header-label">RHEL 10 · Image Mode · Multi-Arch</div>
-  <h1>bootc Image Builder</h1>
-  <div class="subtitle">configure → pre-flight → generate script or build directly on this host</div>
+  <div class="header-label">RHEL 10 · Image Mode · Multi-Arch Studio</div>
+  <h1>Image Mode Studio</h1>
+  <div class="subtitle">Phase A — configure → prepare engine → build → download the RAW image · Phase B — dd to DASD on the Z host</div>
 </header>
 
 <div class="container">
@@ -670,6 +903,27 @@ PAGE = r"""<!DOCTYPE html>
     <button class="preflight-run-btn" id="preflight-btn" type="button" onclick="runPreflight()">[ run checks ]</button>
   </div>
   <div id="preflight-results" class="preflight-body" style="display:none;"></div>
+</div>
+
+<!-- ── Build Engine (Infrastructure Automation) ── -->
+<div class="section" style="margin-bottom:24px;">
+  <div class="section-header" style="justify-content:space-between;">
+    <div style="display:flex;align-items:center;gap:10px;">
+      <span class="section-num">⚙</span>
+      <span class="section-title">Build Engine</span>
+      <span class="engine-badge" id="engine-badge">detecting…</span>
+    </div>
+    <button class="preflight-run-btn" id="engine-btn" type="button" onclick="prepareEngine()">[ prepare build engine ]</button>
+  </div>
+  <div class="preflight-body" style="padding:14px 20px;">
+    <div class="toggle-hint" style="line-height:1.6;">
+      Cross-compiling <code>s390x</code> on a non-Z host needs QEMU emulation. This self-heals the
+      <code>binfmt</code> / <code>buildx</code> layer (docker or podman, auto-detected). A native
+      s390x host skips emulation entirely.
+    </div>
+    <pre class="output-script" id="engine-out" style="display:none;white-space:pre-wrap;max-height:240px;margin-top:12px;"></pre>
+    <span class="build-status" id="engine-status" style="display:block;margin-top:8px;"></span>
+  </div>
 </div>
 
 <form method="POST" action="/generate" id="form">
@@ -752,13 +1006,13 @@ PAGE = r"""<!DOCTYPE html>
         <input type="text" name="boot_dasd" value="0.0.0200"
                pattern="[0-9a-fA-F]\.[0-9a-fA-F]\.[0-9a-fA-F]{4}"
                id="boot_dasd" placeholder="0.0.0200">
-        <span class="hint">Goes into dasd.conf and zipl.conf — the DASD the OS boots from</span>
+        <span class="hint">Baked into dasd.conf / zipl.conf and the Phase B deploy snippet — the DASD the OS boots from</span>
       </div>
       <div class="field">
         <label>DD target DASD device</label>
         <input type="text" name="dd_dasd" value="/dev/dasda"
                id="dd_dasd" placeholder="/dev/dasda">
-        <span class="hint">Block device to write the RAW image to (e.g. /dev/dasda, /dev/dasdb)</span>
+        <span class="hint">Where you'll <code>dd</code> the RAW in Phase B on the Z host (e.g. /dev/dasda)</span>
       </div>
       <div class="field">
         <label>Storage layout</label>
@@ -773,7 +1027,7 @@ PAGE = r"""<!DOCTYPE html>
         <span class="hint">Used in fstab and zipl kernel parameters</span>
       </div>
       <div class="warn">
-        dasdfmt is destructive — the DD target DASD will be fully overwritten. Confirm the device address before running the script.
+        These addresses configure the image and the Phase B deploy snippet — nothing is written to a DASD on this build host. On the Z host, <code>dasdfmt</code> is destructive: it fully erases the target DASD.
       </div>
     </div>
   </div>
@@ -924,7 +1178,7 @@ PAGE = r"""<!DOCTYPE html>
 
   <div class="generate-wrap" style="gap:14px;">
     <button type="submit">&#x25B6;&nbsp; Generate Script</button>
-    <button type="button" class="build-now" id="build-btn" onclick="buildNow()">⚙&nbsp; Build on This Host</button>
+    <button type="button" class="build-now" id="build-btn" onclick="buildNow()">⚙&nbsp; Build Image</button>
   </div>
 
 </form>
@@ -941,16 +1195,26 @@ PAGE = r"""<!DOCTYPE html>
 <!-- ── Build terminal ── -->
 <div class="output-wrap" id="build-wrap">
   <div class="output-header">
-    <span class="output-title">Build Output</span>
+    <span class="output-title">Build Output — Phase A</span>
     <span class="build-status" id="build-status"></span>
   </div>
   <pre class="output-script" id="build-out" style="white-space:pre-wrap;"></pre>
+  <div class="deliverable" id="deliverable" style="display:none;">
+    <a class="download-btn" id="download-link" href="#" download>&#x2B07; Download image</a>
+    <div class="toggle-hint" style="line-height:1.6;">
+      <strong style="color:var(--text);">Phase B — deploy on the Z host:</strong>
+      copy this image to a Linux-on-Z host with the DASD attached, then
+      <code>dasdfmt</code> → <code>fdasd</code> → <code>dd</code> → <code>zipl</code>.
+      The exact commands (with your DASD addresses) are in the generated script's
+      <code>PHASE B</code> block — click <em>Generate Script</em> to see them.
+    </div>
+  </div>
 </div>
 
 </div><!-- /container -->
 
 <footer>
-  <span>RHEL 10 bootc · Multi-Arch Image Builder</span>
+  <span>RHEL 10 · Image Mode Studio</span>
   <span>base image: registry.redhat.io/rhel10/rhel-bootc:latest</span>
 </footer>
 
@@ -1057,6 +1321,8 @@ async function buildNow() {
   btn.textContent = '⚙ Starting...';
 
   var params = new URLSearchParams(new FormData(document.getElementById('form'))).toString();
+  var deliverable = document.getElementById('deliverable');
+  deliverable.style.display = 'none';
 
   try {
     var res = await fetch('/build', {
@@ -1080,12 +1346,18 @@ async function buildNow() {
         if (msg.rc === 0) {
           statusEl.className = 'build-status done';
           statusEl.textContent = '✓ complete';
+          if (msg.artifact) {
+            var link = document.getElementById('download-link');
+            link.href = '/download/' + data.job_id;
+            link.textContent = '⬇ Download ' + (msg.artifact_name || 'image');
+            deliverable.style.display = 'flex';
+          }
         } else {
           statusEl.className = 'build-status failed';
           statusEl.textContent = '✗ failed (rc=' + msg.rc + ')';
         }
         btn.disabled = false;
-        btn.textContent = '⚙ Build on This Host';
+        btn.textContent = '⚙ Build Image';
       } else {
         outEl.textContent += msg.line + '\n';
         outEl.scrollTop = outEl.scrollHeight;
@@ -1096,15 +1368,96 @@ async function buildNow() {
       statusEl.className = 'build-status failed';
       statusEl.textContent = '✗ stream disconnected';
       btn.disabled = false;
-      btn.textContent = '⚙ Build on This Host';
+      btn.textContent = '⚙ Build Image';
     };
   } catch(e) {
     statusEl.className = 'build-status failed';
     statusEl.textContent = '✗ ' + e;
     btn.disabled = false;
-    btn.textContent = '⚙ Build on This Host';
+    btn.textContent = '⚙ Build Image';
   }
 }
+
+// ── Build engine (Infrastructure Automation) ──
+async function refreshEngineBadge() {
+  var badge = document.getElementById('engine-badge');
+  try {
+    var checks = await (await fetch('/preflight')).json();
+    var find = function(n) { var c = checks.find(function(x){return x.name===n;}); return c ? c.detail : ''; };
+    var engine = (find('container engine').split(' ')[0]) || '?';
+    var hostArch = (find('host architecture').split(' ')[0]) || '?';
+    var native = (hostArch === 's390x');
+    badge.classList.remove('native', 'cross');
+    if (native) {
+      badge.classList.add('native');
+      badge.textContent = engine + ' · native ' + hostArch;
+    } else {
+      badge.classList.add('cross');
+      var emu = find('QEMU s390x emulation');
+      var emuOk = emu.indexOf('registered') === 0;
+      badge.textContent = engine + ' · cross · qemu ' + (emuOk ? '✓' : '✗');
+    }
+  } catch(e) {
+    badge.textContent = 'unknown';
+  }
+}
+
+async function prepareEngine() {
+  var btn = document.getElementById('engine-btn');
+  var out = document.getElementById('engine-out');
+  var statusEl = document.getElementById('engine-status');
+  btn.disabled = true;
+  btn.textContent = '[ preparing... ]';
+  out.style.display = 'block';
+  out.textContent = '';
+  statusEl.className = 'build-status running';
+  statusEl.textContent = 'running...';
+
+  var arch = document.getElementById('arch-val').value;
+  try {
+    var res = await fetch('/engine/prepare', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/x-www-form-urlencoded'},
+      body: 'arch=' + encodeURIComponent(arch),
+    });
+    var data = await res.json();
+    var es = new EventSource('/stream/' + data.job_id);
+    es.onmessage = function(e) {
+      var msg = JSON.parse(e.data);
+      if (msg.done) {
+        es.close();
+        if (msg.rc === 0) {
+          statusEl.className = 'build-status done';
+          statusEl.textContent = '✓ engine ready';
+        } else {
+          statusEl.className = 'build-status failed';
+          statusEl.textContent = '✗ prep failed (rc=' + msg.rc + ')';
+        }
+        btn.disabled = false;
+        btn.textContent = '[ prepare build engine ]';
+        refreshEngineBadge();
+      } else {
+        out.textContent += msg.line + '\n';
+        out.scrollTop = out.scrollHeight;
+      }
+    };
+    es.onerror = function() {
+      es.close();
+      statusEl.className = 'build-status failed';
+      statusEl.textContent = '✗ stream disconnected';
+      btn.disabled = false;
+      btn.textContent = '[ prepare build engine ]';
+    };
+  } catch(e) {
+    statusEl.className = 'build-status failed';
+    statusEl.textContent = '✗ ' + e;
+    btn.disabled = false;
+    btn.textContent = '[ prepare build engine ]';
+  }
+}
+
+// Populate the engine badge on load.
+refreshEngineBadge();
 </script>
 
 </body>
@@ -1141,6 +1494,11 @@ def generate_script(p):
 
     is_s390x = (arch == 's390x')
     is_raw   = (output_format == 'raw')
+
+    # Which engine / build mode is this host? Determines cross-compile plumbing.
+    engine = detect_engine() or 'podman'
+    mode   = build_mode_for(arch)          # 'native' or 'cross'
+    is_cross = (mode == 'cross')
 
     builder_img = "registry.redhat.io/rhel10/bootc-image-builder:latest"
     base_img    = "registry.redhat.io/rhel10/rhel-bootc:latest"
@@ -1304,119 +1662,108 @@ RUN chmod 0755 /usr/local/sbin/firstboot-lvm.sh \\\\
         firstboot_section = ""
         firstboot_containerfile = "# Single XFS root — no firstboot LVM service"
 
-    # ── Deploy steps ────────────────────────────────────────────────────────────
-    if is_s390x and is_raw:
-        deploy_section = f"""
-# ─────────────────────────────────────────────────────────────────────────────
-# STEP 6 · Bring DASD online
-# ─────────────────────────────────────────────────────────────────────────────
-step "Bringing DASD $BOOT_DASD online"
-cio_ignore -r "$BOOT_DASD" 2>/dev/null || true
-chccwdev -e "$BOOT_DASD"
-for i in $(seq 1 20); do
-    [ -b "$DD_TARGET" ] && break
-    warn "Waiting for $DD_TARGET... ($i/20)"
-    sleep 1
-done
-[ -b "$DD_TARGET" ] || err "$DD_TARGET did not appear after 20 seconds"
-lsdasd | grep -i "${{BOOT_DASD##*.}}" || warn "Could not confirm DASD status — check lsdasd manually"
-log "DASD online: $DD_TARGET"
+    # ── Phase A ends at a downloadable image ───────────────────────────────────
+    # This host builds and produces the image file only — it never writes to a
+    # physical device (you cannot dd to a DASD from a build/Windows host). The
+    # dasdfmt/fdasd/dd/zipl write is Phase B, run manually on the Z host below.
+    deploy_section = ""
 
-# ─────────────────────────────────────────────────────────────────────────────
-# STEP 7 · Low-level format (dasdfmt) + partition
-# ─────────────────────────────────────────────────────────────────────────────
-step "Formatting DASD (CDL, 4096b blocks)"
-warn "This will ERASE all data on $DD_TARGET"
-read -r -p "Type YES to continue: " CONFIRM
-[ "$CONFIRM" = "YES" ] || err "Aborted by user"
-dasdfmt -b 4096 -d cdl -y "$DD_TARGET"
-fdasd -a "$DD_TARGET"
-log "DASD formatted and partitioned"
-
-# ─────────────────────────────────────────────────────────────────────────────
-# STEP 8 · dd image to DASD
-# ─────────────────────────────────────────────────────────────────────────────
-step "Writing RAW image to $DD_TARGET"
-dd if="$OUTPUT_IMAGE" of="$DD_TARGET" bs=64M status=progress
-sync
-log "dd complete — write buffers flushed"
-
-# ─────────────────────────────────────────────────────────────────────────────
-# STEP 9 · Install zipl bootloader
-# ─────────────────────────────────────────────────────────────────────────────
-step "Installing zipl bootloader"
-MOUNT_PT="/mnt/bootc-zipl"
-mkdir -p "$MOUNT_PT"
-mount "${{DD_TARGET}}1" "$MOUNT_PT" || mount "${{DD_TARGET}}p1" "$MOUNT_PT" || \\
-    err "Could not mount $DD_TARGET partition — check fdasd output"
-zipl --verbose --target "$MOUNT_PT"
-umount "$MOUNT_PT"
-log "zipl installed"
-"""
-        done_block = f"""echo ""
+    done_block = f"""echo ""
 echo -e "${{GRN}}══════════════════════════════════════════════════════${{NC}}"
-echo -e "${{GRN}}  Build and deploy complete${{NC}}"
-echo -e "${{GRN}}══════════════════════════════════════════════════════${{NC}}"
-echo ""
-echo "  IPL address : ${{BOOT_DASD##*.}}"
-echo "  First login : ssh ${{ADMIN_USER}}@<lpar-ip>"
-echo "  Default pw  : Ch@ngeMe1st!  (expires on first login)"
-echo ""
-echo "  IPL the LPAR from HMC: Load → Normal → ${{BOOT_DASD##*.}}"
-echo ""
-"""
-    elif is_raw:
-        deploy_section = f"""
-# ─────────────────────────────────────────────────────────────────────────────
-# STEP 6 · Write RAW image to target disk
-# ─────────────────────────────────────────────────────────────────────────────
-step "Writing RAW image to {target_disk}"
-[ -b "{target_disk}" ] || err "{target_disk} is not a block device — check target disk"
-warn "This will ERASE all data on {target_disk}"
-read -r -p "Type YES to continue: " CONFIRM
-[ "$CONFIRM" = "YES" ] || err "Aborted by user"
-dd if="$OUTPUT_IMAGE" of="{target_disk}" bs=64M status=progress
-sync
-log "dd complete — boot the target machine from {target_disk}"
-"""
-        done_block = f"""echo ""
-echo -e "${{GRN}}══════════════════════════════════════════════════════${{NC}}"
-echo -e "${{GRN}}  Build and deploy complete${{NC}}"
-echo -e "${{GRN}}══════════════════════════════════════════════════════${{NC}}"
-echo ""
-echo "  Boot disk   : {target_disk}"
-echo "  First login : ssh ${{ADMIN_USER}}@<ip>"
-echo "  Default pw  : Ch@ngeMe1st!  (expires on first login)"
-echo ""
-"""
-    else:
-        deploy_section = ""
-        done_block = f"""echo ""
-echo -e "${{GRN}}══════════════════════════════════════════════════════${{NC}}"
-echo -e "${{GRN}}  {output_format.upper()} image ready${{NC}}"
+echo -e "${{GRN}}  {output_format.upper()} image ready — Phase A complete${{NC}}"
 echo -e "${{GRN}}══════════════════════════════════════════════════════${{NC}}"
 echo ""
 echo "  Output : $OUTPUT_IMAGE"
 echo "  Size   : $(du -sh "$OUTPUT_IMAGE" | cut -f1)"
+echo "ARTIFACT_PATH=$OUTPUT_IMAGE"
 echo ""
-echo "  Import this image into your target environment."
+echo "  Download the image from the web UI, then deploy on the Z host (Phase B)."
 echo ""
 """
 
-    # ── Preflight disk check ────────────────────────────────────────────────────
-    if is_raw:
-        if is_s390x:
-            preflight_disk_check = '[ -b "$DD_TARGET" ] || err "DD target $DD_TARGET is not a block device"'
-        else:
-            preflight_disk_check = f'[ -b "{target_disk}" ] || err "Target {target_disk} is not a block device"'
+    # ── Phase B reference (NOT executed here) ──────────────────────────────────
+    if is_s390x and is_raw:
+        phase_b_snippet = f"""
+# ═══════════════════════════════════════════════════════════════════════════
+# PHASE B — DEPLOY ON THE IBM Z HOST  (run manually where the DASD is attached)
+# ═══════════════════════════════════════════════════════════════════════════
+# Not run here. Copy the RAW image to your Linux-on-Z host, then, as root:
+#
+#   BOOT_DASD={boot_dasd}
+#   DD_TARGET={dd_dasd}
+#   RAW=/path/to/{image_name}.raw
+#
+#   chccwdev -e "$BOOT_DASD"
+#   dasdfmt -b 4096 -d cdl -y "$DD_TARGET"          # DESTRUCTIVE — erases the DASD
+#   fdasd -a "$DD_TARGET"
+#   dd if="$RAW" of="$DD_TARGET" bs=64M status=progress && sync
+#   mount "${{DD_TARGET}}1" /mnt && zipl -V -t /mnt && umount /mnt
+#   # IPL from the HMC:  Load → Normal → {boot_dasd.split('.')[-1]}
+"""
+    elif is_raw:
+        phase_b_snippet = f"""
+# ═══════════════════════════════════════════════════════════════════════════
+# PHASE B — WRITE TO TARGET DISK  (run manually on the target host)
+# ═══════════════════════════════════════════════════════════════════════════
+#   RAW=/path/to/{image_name}.raw
+#   dd if="$RAW" of={target_disk} bs=64M status=progress && sync
+"""
     else:
-        preflight_disk_check = f'log "Output format: {output_format} — no block device required"'
+        phase_b_snippet = ""
 
-    # ── Script-level vars ────────────────────────────────────────────────────────
-    if is_s390x:
-        arch_vars = f'BOOT_DASD="{boot_dasd}"\nDD_TARGET="{dd_dasd}"'
-    else:
-        arch_vars = ''
+    # ── Preflight (build host produces a file — no target device needed) ───────
+    preflight_disk_check = ('log "Build host produces an image file — '
+                            'no target block device required here (see Phase B)"')
+
+    # ── Script-level vars ──────────────────────────────────────────────────────
+    arch_vars = ''
+
+    # ── STEP 4/5 engine plumbing (docker buildx vs podman; native vs cross) ────
+    # Entitlement certs only exist on a subscribed RHEL host (native mode).
+    ent_mounts = ""
+    if not is_cross:
+        ent_mounts = (
+            "    --volume /etc/pki/entitlement:/etc/pki/entitlement:ro \\\n"
+            "    --volume /etc/rhsm:/etc/rhsm:ro \\\n"
+            "    --volume /etc/yum.repos.d/redhat.repo:/etc/yum.repos.d/redhat.repo:ro \\\n"
+        )
+
+    if engine == 'docker':
+        build_note = ('log "Cross-compiling linux/{a} under QEMU via buildx — host RHEL '
+                      'entitlements not mounted; relying on base-image content + registry login"'
+                      ).format(a=arch) if is_cross else 'true'
+        build_step = f"""{build_note}
+docker buildx build \\
+    --builder {BUILDX_BUILDER_NAME} \\
+    --platform linux/{arch} \\
+    --load \\
+    -t "$FULL_IMAGE" \\
+    -f "${{BUILD_CTX}}/Containerfile" \\
+    "$BUILD_CTX\""""
+    else:  # podman
+        build_step = f"""podman build \\
+    --platform linux/{arch} \\
+    --tls-verify=false \\
+{ent_mounts}    --network=host \\
+    -t "$FULL_IMAGE" \\
+    -f "${{BUILD_CTX}}/Containerfile" \\
+    "$BUILD_CTX\""""
+
+    # bootc-image-builder: podman reads the freshly built image from local storage.
+    containers_mount = ("    -v /var/lib/containers:/var/lib/containers \\\n"
+                        if engine == 'podman' else "")
+    bib_note = ('warn "bootc-image-builder is best supported under podman; under docker the '
+                'target image must be in containers-storage or pushed to a registry first"'
+                if engine == 'docker' else 'true')
+    imagebuilder_step = f"""{bib_note}
+"$ENGINE" run --rm \\
+    --privileged \\
+    --security-opt seccomp=unconfined \\
+{containers_mount}    -v "${{OUTPUT_DIR}}:/output" \\
+    "$BUILDER_IMAGE" \\
+    --type {output_format} \\
+    --target-arch {arch} \\
+    "$FULL_IMAGE\""""
 
     storage_label = (f"LVM on {'DASD' if is_s390x else 'disk'} (VG: {vg_name})"
                      if (is_s390x and storage == 'lvm') else "Single XFS root")
@@ -1451,13 +1798,15 @@ IMAGE_TAG="{image_tag}"
 FULL_IMAGE="${{IMAGE_NAME}}:${{IMAGE_TAG}}"
 BUILDER_IMAGE="{builder_img}"
 ADMIN_USER="{admin_user}"
+ENGINE="{engine}"
+BUILD_MODE="{mode}"          # native | cross (cross = QEMU-emulated s390x build)
 {arch_vars}
 {proxy_block}
 # ─────────────────────────────────────────────────────────────────────────────
 # STEP 0 · Pre-flight checks
 # ─────────────────────────────────────────────────────────────────────────────
-step "Pre-flight checks"
-command -v podman >/dev/null 2>&1 || err "podman not found — install it first"
+step "Pre-flight checks ($ENGINE, $BUILD_MODE build of linux/{arch})"
+command -v "$ENGINE" >/dev/null 2>&1 || err "$ENGINE not found — install it first"
 [ "$(id -u)" -eq 0 ] || err "This script must run as root (or with sudo)"
 {preflight_disk_check}
 mkdir -p "$BUILD_CTX/dracut" "$BUILD_CTX/network" "$BUILD_CTX/ssh" \\
@@ -1470,7 +1819,7 @@ log "Pre-flight OK"
 # ─────────────────────────────────────────────────────────────────────────────
 step "Registry login"
 log "Logging in to registry.redhat.io..."
-podman login registry.redhat.io || err "Registry login failed"
+"$ENGINE" login registry.redhat.io || err "Registry login failed"
 
 # ─────────────────────────────────────────────────────────────────────────────
 # STEP 2 · Write build context files
@@ -1573,34 +1922,17 @@ CFEOF
 log "Containerfile written"
 
 # ─────────────────────────────────────────────────────────────────────────────
-# STEP 4 · podman build
+# STEP 4 · Build container image ({engine}, {mode} build of linux/{arch})
 # ─────────────────────────────────────────────────────────────────────────────
 step "Building container image: $FULL_IMAGE"
-podman build \\
-    --platform linux/{arch} \\
-    --tls-verify=false \\
-    --volume /etc/pki/entitlement:/etc/pki/entitlement:ro \\
-    --volume /etc/rhsm:/etc/rhsm:ro \\
-    --volume /etc/yum.repos.d/redhat.repo:/etc/yum.repos.d/redhat.repo:ro \\
-    --network=host \\
-    -t "$FULL_IMAGE" \\
-    -f "${{BUILD_CTX}}/Containerfile" \\
-    "$BUILD_CTX"
+{build_step}
 log "Container image built: $FULL_IMAGE"
 
 # ─────────────────────────────────────────────────────────────────────────────
 # STEP 5 · bootc-image-builder → {output_format.upper()} image
 # ─────────────────────────────────────────────────────────────────────────────
 step "Running bootc-image-builder → {output_format.upper()}"
-podman run --rm -it \\
-    --privileged \\
-    --security-opt seccomp=unconfined \\
-    -v /var/lib/containers:/var/lib/containers \\
-    -v "${{OUTPUT_DIR}}:/output" \\
-    "$BUILDER_IMAGE" \\
-    --type {output_format} \\
-    --target-arch {arch} \\
-    "$FULL_IMAGE"
+{imagebuilder_step}
 
 OUTPUT_IMAGE=$(find "$OUTPUT_DIR" -name "*.{output_format}" | head -1)
 [ -f "$OUTPUT_IMAGE" ] || err "{output_format.upper()} image not found in $OUTPUT_DIR"
@@ -1609,7 +1941,7 @@ log "{output_format.upper()} image: $OUTPUT_IMAGE ($(du -sh "$OUTPUT_IMAGE" | cu
 # ─────────────────────────────────────────────────────────────────────────────
 # DONE
 # ─────────────────────────────────────────────────────────────────────────────
-{done_block}"""
+{done_block}{phase_b_snippet}"""
     return script
 
 
@@ -1639,6 +1971,8 @@ class Handler(BaseHTTPRequestHandler):
             self.handle_preflight()
         elif path.startswith('/stream/'):
             self.handle_stream(path[len('/stream/'):])
+        elif path.startswith('/download/'):
+            self.handle_download(path[len('/download/'):])
         else:
             self.send_error(404)
 
@@ -1650,18 +1984,41 @@ class Handler(BaseHTTPRequestHandler):
         if path == '/generate':
             self.send_page(generate_script(params))
         elif path == '/build':
-            script = generate_script(params)
             job_id = uuid.uuid4().hex[:8]
-            jobs[job_id] = {'lines': [], 'done': False, 'rc': None, 'lock': threading.Lock()}
-            threading.Thread(target=run_build_job, args=(job_id, script), daemon=True).start()
-            body = json.dumps({'job_id': job_id}).encode('utf-8')
-            self.send_response(200)
-            self.send_header('Content-Type', 'application/json')
-            self.send_header('Content-Length', str(len(body)))
-            self.end_headers()
-            self.wfile.write(body)
+            out_dir = os.path.join(OUTPUT_ROOT, job_id)
+            fmt = params.get('output_format', ['raw'])[0].strip()
+            # Isolate each build's artifacts so downloads never collide.
+            params['output_dir'] = [out_dir]
+            script = generate_script(params)
+            jobs[job_id] = {
+                'lines': [], 'done': False, 'rc': None, 'lock': threading.Lock(),
+                'artifact': None, 'artifact_name': None,
+            }
+            threading.Thread(
+                target=run_build_job, args=(job_id, script, out_dir, fmt), daemon=True,
+            ).start()
+            self._send_json({'job_id': job_id})
+        elif path == '/engine/prepare':
+            arch = params.get('arch', ['s390x'])[0].strip()
+            job_id = uuid.uuid4().hex[:8]
+            jobs[job_id] = {
+                'lines': [], 'done': False, 'rc': None, 'lock': threading.Lock(),
+                'artifact': None, 'artifact_name': None,
+            }
+            threading.Thread(
+                target=run_engine_job, args=(job_id, arch), daemon=True,
+            ).start()
+            self._send_json({'job_id': job_id})
         else:
             self.send_error(404)
+
+    def _send_json(self, obj):
+        body = json.dumps(obj).encode('utf-8')
+        self.send_response(200)
+        self.send_header('Content-Type', 'application/json')
+        self.send_header('Content-Length', str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
 
     def handle_preflight(self):
         body = json.dumps(run_preflight()).encode('utf-8')
@@ -1689,25 +2046,56 @@ class Handler(BaseHTTPRequestHandler):
                     lines = list(job['lines'])
                     done  = job['done']
                     rc    = job['rc']
+                    artifact_name = job.get('artifact_name')
                 while sent < len(lines):
                     self.wfile.write(f'data: {json.dumps({"line": lines[sent]})}\n\n'.encode())
                     self.wfile.flush()
                     sent += 1
                 if done:
-                    self.wfile.write(f'data: {json.dumps({"done": True, "rc": rc})}\n\n'.encode())
+                    payload = {"done": True, "rc": rc,
+                               "artifact": bool(artifact_name),
+                               "artifact_name": artifact_name}
+                    self.wfile.write(f'data: {json.dumps(payload)}\n\n'.encode())
                     self.wfile.flush()
                     break
                 time.sleep(0.1)
         except (BrokenPipeError, ConnectionResetError):
             pass  # client disconnected
 
+    def handle_download(self, job_id):
+        job = jobs.get(job_id)
+        if not job:
+            self.send_error(404, "Unknown job")
+            return
+        with job['lock']:
+            artifact = job.get('artifact')
+            name = job.get('artifact_name') or 'image.raw'
+        if not artifact or not os.path.isfile(artifact):
+            self.send_error(404, "No artifact for this job")
+            return
+        size = os.path.getsize(artifact)
+        self.send_response(200)
+        self.send_header('Content-Type', 'application/octet-stream')
+        self.send_header('Content-Disposition', f'attachment; filename="{name}"')
+        self.send_header('Content-Length', str(size))
+        self.end_headers()
+        try:
+            with open(artifact, 'rb') as fh:
+                while True:
+                    chunk = fh.read(1024 * 1024)  # 1 MiB — never load the whole RAW
+                    if not chunk:
+                        break
+                    self.wfile.write(chunk)
+        except (BrokenPipeError, ConnectionResetError):
+            pass  # client cancelled the download
+
 
 # ── Entry point ───────────────────────────────────────────────────────────────
 
 if __name__ == '__main__':
     host = '0.0.0.0'
-    print(f"\n  RHEL 10 bootc s390x builder")
-    print(f"  ─────────────────────────────")
+    print(f"\n  RHEL 10 · Image Mode Studio (s390x multi-arch)")
+    print(f"  ───────────────────────────────────────────────")
     print(f"  Listening on  http://0.0.0.0:{PORT}")
     print(f"  Open from your workstation:")
 
