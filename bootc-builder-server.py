@@ -214,7 +214,7 @@ def run_preflight():
 
     # Entitlement checks are advisory. On a non-RHEL host they are never present
     # natively; they only gate RHEL-CDN package installs during an entitled build.
-    advisory = ' (only needed for entitled builds — copy certs in, see runbook §2)'
+    advisory = ' — only needed for entitled builds'
     ent_dir = '/etc/pki/entitlement'
     try:
         pems = [f for f in os.listdir(ent_dir) if f.endswith('.pem')]
@@ -656,6 +656,22 @@ PAGE = r"""<!DOCTYPE html>
   .preflight-item.warn .preflight-name { color: var(--amber); }
   .preflight-item.fail .preflight-name { color: var(--red); }
   .preflight-detail { color: var(--text-dim); font-family: var(--mono); word-break: break-all; }
+
+  /* ── Collapsed advisory group ── */
+  .advisory-group { margin-top: 4px; }
+  .advisory-group > summary {
+    cursor: pointer;
+    list-style: none;
+    color: var(--amber);
+    font-size: 12px;
+    padding: 6px 0;
+    letter-spacing: 0.04em;
+    user-select: none;
+  }
+  .advisory-group > summary::-webkit-details-marker { display: none; }
+  .advisory-group > summary::before { content: '▸ '; }
+  .advisory-group[open] > summary::before { content: '▾ '; }
+  .advisory-group[open] > summary { border-bottom: 1px solid rgba(255,183,0,0.18); margin-bottom: 4px; }
 
   .preflight-run-btn {
     font-family: var(--mono);
@@ -1345,14 +1361,25 @@ async function runPreflight() {
     var res = await fetch('/preflight');
     var checks = await res.json();
     var ICON = {ok: '✓', warn: '⚠', fail: '✗'};
-    results.innerHTML = checks.map(function(c) {
-      var level = c.level || (c.ok ? 'ok' : 'fail');
+    function lvl(c) { return c.level || (c.ok ? 'ok' : 'fail'); }
+    function row(c) {
+      var level = lvl(c);
       return '<div class="preflight-item ' + level + '">' +
         '<span class="preflight-icon">' + (ICON[level] || '?') + '</span>' +
         '<span class="preflight-name">' + c.name + '</span>' +
         '<span class="preflight-detail">' + c.detail + '</span>' +
         '</div>';
-    }).join('');
+    }
+    var warns = checks.filter(function(c) { return lvl(c) === 'warn'; });
+    var main  = checks.filter(function(c) { return lvl(c) !== 'warn'; });
+    var html = main.map(row).join('');
+    if (warns.length) {
+      html += '<details class="advisory-group"><summary>' +
+        warns.length + (warns.length > 1 ? ' advisories' : ' advisory') +
+        ' — informational, not blocking</summary>' +
+        warns.map(row).join('') + '</details>';
+    }
+    results.innerHTML = html;
     results.style.display = 'block';
   } catch(e) {
     results.innerHTML = '<div class="preflight-item fail">' +
