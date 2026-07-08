@@ -60,7 +60,7 @@ IBM Z host (DASD)   ←──────── dasdfmt / fdasd / dd / zipl  ◄
 │   └── firstboot-lvm.service             # Systemd unit for first-boot LVM setup
 ├── dasd.conf                             # DASD device persistence config
 ├── fstab                                 # Root filesystem mount config
-├── image-builder.ps1                     # Windows (Docker Desktop) build script
+├── bootc-builder-server.py               # Image Mode Studio web app (Phase A)
 ├── rpms/                                 # Drop local RPMs here (optional, can be empty)
 ├── RHEL10_bootc_s390x.md                 # General reference guide
 ├── Deploy_Guide.md                       # LPAR deployment runbook
@@ -151,12 +151,9 @@ podman run --rm -it --privileged \
 
 ### Windows (Docker Desktop)
 
-```powershell
-.\image-builder.ps1 `
-  -BootcImage rhel10-bootc-s390x:latest `
-  -OutputPath "C:\Users\YourUser\output" `
-  -ImageType qcow2
-```
+Run the **Studio** (`python bootc-builder-server.py`) — it drives Docker Desktop's buildx
+engine for you (auto-detected), builds the s390x image under QEMU, and gives you the RAW to
+download. See [Quick Start](#quick-start--the-studio-phase-a) above.
 
 ---
 

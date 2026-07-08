@@ -436,14 +436,9 @@ Supported output types: `qcow2`, `raw`, `iso`, `ami`, `vmdk`
 
 ### Using Docker on Windows
 
-Use the provided PowerShell script `image-builder.ps1`:
-
-```powershell
-.\image-builder.ps1 `
-  -BootcImage images.pkgrepo.example.com/rhel10-bootc-s390x:latest `
-  -OutputPath "C:\Users\YourUser\output" `
-  -ImageType qcow2
-```
+Easiest path: run the **Image Mode Studio** (`python bootc-builder-server.py`) — it
+auto-detects Docker Desktop's buildx engine, prepares QEMU emulation, and produces a
+downloadable RAW. See [`bootc-builder-server.md`](./bootc-builder-server.md).
 
 Or run the builder container directly:
 
