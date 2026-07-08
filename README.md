@@ -61,6 +61,8 @@ IBM Z host (DASD)   ←──────── dasdfmt / fdasd / dd / zipl  ◄
 ├── dasd.conf                             # DASD device persistence config
 ├── fstab                                 # Root filesystem mount config
 ├── bootc-builder-server.py               # Image Mode Studio web app (Phase A)
+├── studio.sh                             # Start/stop the Studio (macOS/Linux)
+├── studio.ps1                            # Start/stop the Studio (Windows)
 ├── rpms/                                 # Drop local RPMs here (optional, can be empty)
 ├── RHEL10_bootc_s390x.md                 # General reference guide
 ├── Deploy_Guide.md                       # LPAR deployment runbook
@@ -71,12 +73,21 @@ IBM Z host (DASD)   ←──────── dasdfmt / fdasd / dd / zipl  ◄
 
 ## Quick Start — the Studio (Phase A)
 
-Run the web app on your build host (Windows/Docker Desktop, x86 Linux, or native s390x):
+Run the web app on your build host (Windows/Docker Desktop, x86 Linux, or native s390x).
+One command to start it:
 
 ```bash
-podman login registry.redhat.io        # or: docker login registry.redhat.io
-python3 bootc-builder-server.py        # → open http://<host-ip>:8080
+# macOS / Linux
+./studio.sh start        # → prints the URL; stop | restart | status | logs
 ```
+
+```powershell
+# Windows
+.\studio.ps1 start       # stop | restart | status | logs
+```
+
+<sub>Prefer to run it in the foreground? `python3 bootc-builder-server.py` works too.
+Log in to the registry first: `podman login registry.redhat.io` (or `docker login …`).</sub>
 
 In the browser:
 

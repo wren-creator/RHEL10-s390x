@@ -1,0 +1,12 @@
+# Python
+__pycache__/
+*.py[cod]
+
+# Image Mode Studio runtime artifacts
+.studio.pid
+studio.log
+studio.log.err
+
+# Build output (RAW/qcow2 images can be multi-GB)
+output/
+bootc-output/
