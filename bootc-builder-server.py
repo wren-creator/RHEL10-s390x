@@ -1179,6 +1179,16 @@ PAGE = r"""<!DOCTYPE html>
         <input type="text" name="local_repo_url" placeholder="https://repo.internal.corp/rhel10/$basearch/">
         <span class="hint">Your internal mirror — packages install from here first (<code>priority=1</code>); RHEL CDN is used only as a backup. Baked into the image.</span>
       </div>
+      <div class="toggle-row">
+        <label class="toggle-switch">
+          <input type="checkbox" name="repo_insecure" value="on">
+          <span class="toggle-track"></span>
+        </label>
+        <div class="toggle-info">
+          <div class="toggle-title">Skip mirror TLS verification</div>
+          <div class="toggle-hint">Sets <code>sslverify=0</code> on the local repo — use if your mirror serves HTTPS with a self-signed or internal-CA certificate. Leave off to verify normally.</div>
+        </div>
+      </div>
     </div>
   </div>
 
@@ -1558,14 +1568,17 @@ export no_proxy="localhost,127.0.0.1,registry.redhat.io"
     # ── Local package repo (optional) ──────────────────────────────────────────
     # When set, packages install from your internal mirror first (priority=1) and
     # the RHEL CDN is only used as a backup for anything not mirrored.
+    repo_insecure = p.get('repo_insecure', ['off'])[0].strip()   # 'on' → sslverify=0
+    sslverify_val = '0' if repo_insecure == 'on' else '1'
     if local_repo:
-        local_repo_write_step = f"""log "Writing local.repo (mirror: {local_repo})..."
+        local_repo_write_step = f"""log "Writing local.repo (mirror: {local_repo}, sslverify={sslverify_val})..."
 cat > "${{BUILD_CTX}}/local.repo" << 'EOF'
 [localrepo]
 name=Local package mirror
 baseurl={local_repo}
 enabled=1
 gpgcheck=0
+sslverify={sslverify_val}
 priority=1
 EOF"""
         # COPY it in before the dnf install so the mirror is used at build time,

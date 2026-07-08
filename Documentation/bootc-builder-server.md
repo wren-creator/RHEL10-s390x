@@ -165,6 +165,7 @@ The admin password is set to `Ch@ngeMe1st!` and expires on first login. You will
 | Output directory | Where `bootc-image-builder` writes the finished image file (default: `/var/tmp/bootc-output`). |
 | HTTP proxy | Leave blank if not needed. Sets `http_proxy` / `https_proxy` / `no_proxy` in the script. |
 | Local package repo URL | Your internal mirror (e.g. `https://repo.internal.corp/rhel10/$basearch/`). The Studio writes a `[localrepo]` with `priority=1` and copies it into the image *before* the `dnf install`, so packages install from your mirror first and the RHEL CDN is only a backup. `$basearch` is expanded by dnf at build time. |
+| Skip mirror TLS verification | Toggle. Off (default) keeps `sslverify=1`. On sets `sslverify=0` on the local repo — for mirrors served over HTTPS with a self-signed or internal-CA certificate. |
 
 > **Tip:** If your mirror carries every package the image needs, a local repo largely
 > removes the RHEL-CDN entitlement requirement for cross-builds — the base image still
