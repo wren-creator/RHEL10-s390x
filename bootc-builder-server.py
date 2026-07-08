@@ -34,7 +34,15 @@ jobs = {}  # job_id → {'lines': [], 'done': False, 'rc': None, 'artifact': Non
 # detect the host/engine and self-heal the emulation layer (spec milestone 1).
 
 def detect_engine():
-    """Return the preferred container engine name: 'docker', 'podman', or None."""
+    """Return the container engine name: 'docker', 'podman', or None.
+
+    Set STUDIO_ENGINE=podman (or docker) to force one — useful for entitled
+    cross-builds, where podman can mount RHEL entitlement certs into RUN layers
+    but `docker buildx` cannot.
+    """
+    override = os.environ.get('STUDIO_ENGINE', '').strip()
+    if override:
+        return override if shutil.which(override) else None
     for eng in ('docker', 'podman'):
         if shutil.which(eng):
             return eng
@@ -1719,9 +1727,12 @@ echo ""
     arch_vars = ''
 
     # ── STEP 4/5 engine plumbing (docker buildx vs podman; native vs cross) ────
-    # Entitlement certs only exist on a subscribed RHEL host (native mode).
+    # Mount RHEL entitlement certs whenever the build host actually has them — a
+    # subscribed RHEL host, OR a cross-build host where you've copied them in.
+    # (Only podman can pass these into RUN layers; docker buildx cannot.)
+    has_entitlements = os.path.isdir('/etc/pki/entitlement')
     ent_mounts = ""
-    if not is_cross:
+    if has_entitlements:
         ent_mounts = (
             "    --volume /etc/pki/entitlement:/etc/pki/entitlement:ro \\\n"
             "    --volume /etc/rhsm:/etc/rhsm:ro \\\n"
@@ -1729,9 +1740,15 @@ echo ""
         )
 
     if engine == 'docker':
-        build_note = ('log "Cross-compiling linux/{a} under QEMU via buildx — host RHEL '
-                      'entitlements not mounted; relying on base-image content + registry login"'
-                      ).format(a=arch) if is_cross else 'true'
+        if is_cross and not has_entitlements:
+            build_note = (f'log "Cross-compiling linux/{arch} under QEMU via buildx — no host '
+                          'entitlements; relying on base-image content + registry login. For '
+                          'RHEL-CDN packages, use podman (STUDIO_ENGINE=podman) with certs mounted."')
+        elif has_entitlements:
+            build_note = ('warn "Entitlement certs present but docker buildx cannot mount them into '
+                          'RUN layers — set STUDIO_ENGINE=podman for entitled cross-builds."')
+        else:
+            build_note = 'true'
         build_step = f"""{build_note}
 docker buildx build \\
     --builder {BUILDX_BUILDER_NAME} \\

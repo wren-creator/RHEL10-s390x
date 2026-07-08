@@ -45,25 +45,32 @@ hit this. Pick a strategy before you start:
 | **B** | **Build a minimal image** (only packages already in `rhel-bootc`) | Pure smoke-test of the QEMU/buildx/RAW pipeline | Not a deployable image — trims the package list |
 | **C** | **Run the cross-build on a subscribed RHEL x86 VM instead** | You have a RHEL VM handy | Still QEMU cross-compile, but entitlements are native — least friction |
 
-**Strategy A — copy entitlements into the build (recommended for a real validation):**
+**Strategy A — podman in WSL with entitlements mounted (recommended for a real validation):**
 
-On a subscribed RHEL system:
-```bash
-sudo tar czf entitlement.tgz /etc/pki/entitlement /etc/rhsm /etc/yum.repos.d/redhat.repo
-```
-Copy `entitlement.tgz` into WSL and extract to the same paths (`sudo tar xzf entitlement.tgz -C /`).
-Then add the mounts back for this validation — either run the Studio host in **native-style**
-by temporarily setting the mounts, or **Generate Script** and add these three flags to the
-`docker buildx build` / `podman build` invocation:
-```
-    --volume /etc/pki/entitlement:/etc/pki/entitlement:ro \
-    --volume /etc/rhsm:/etc/rhsm:ro \
-    --volume /etc/yum.repos.d/redhat.repo:/etc/yum.repos.d/redhat.repo:ro \
-```
-> Note: `docker buildx` doesn't mount `--volume` for RUN layers the way `podman build` does.
-> If you're on the docker path and CDN installs fail, prefer **Strategy C** (podman on a
-> subscribed RHEL VM) — that path mounts entitlements cleanly. This docker-entitlement gap is
-> exactly what this runbook is meant to pin down.
+`docker buildx` **cannot** mount entitlement certs into `RUN` layers, but `podman build`
+can — so an entitled cross-build uses **podman**. The Studio auto-mounts the certs whenever
+`/etc/pki/entitlement` exists on the build host, and honours `STUDIO_ENGINE=podman`.
+
+1. On a subscribed RHEL system, package the certs:
+   ```bash
+   sudo tar czf entitlement.tgz /etc/pki/entitlement /etc/rhsm /etc/yum.repos.d/redhat.repo
+   ```
+2. Copy `entitlement.tgz` into WSL and extract to the same paths:
+   ```bash
+   sudo tar xzf entitlement.tgz -C /
+   ls /etc/pki/entitlement/*.pem        # confirm at least one cert landed
+   ```
+3. Install podman + emulation in WSL and force the podman engine:
+   ```bash
+   sudo apt install -y podman qemu-user-static
+   export STUDIO_ENGINE=podman
+   sudo -E ./studio.sh start            # -E keeps STUDIO_ENGINE for the server
+   ```
+The generated build will now include the three `--volume /etc/pki/...` mounts automatically,
+and `dnf install` of `s390utils-base`/`zipl`/`lvm2` reaches the RHEL CDN.
+
+> If you stay on **docker**, the Studio warns that entitlement certs can't be mounted into
+> buildx RUN layers and points you here. Docker is fine for **Strategy B** (minimal image).
 
 **Strategy B — minimal image:** in the Studio form, keep only base packages and skip
 `s390utils-base`/`zipl`/`lvm2` for the smoke test. The image won't boot on Z, but it proves
