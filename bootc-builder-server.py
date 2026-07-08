@@ -241,22 +241,51 @@ def run_preflight():
         reg_ok, reg_detail = False, str(exc)
     checks.append({'name': 'registry.redhat.io reachable', 'ok': reg_ok, 'detail': reg_detail})
 
-    if engine:
-        try:
-            r = subprocess.run(
-                [engine, 'login', '--get-login', 'registry.redhat.io'],
-                capture_output=True, text=True, timeout=5,
-            )
-            login_ok = r.returncode == 0
-            login_detail = (r.stdout.strip() if login_ok
-                            else f'not logged in — run: {engine} login registry.redhat.io')
-        except Exception as exc:
-            login_ok, login_detail = False, str(exc)
-    else:
-        login_ok, login_detail = False, 'no container engine found'
+    login_ok, login_detail = _check_registry_login(engine)
     checks.append({'name': 'registry.redhat.io login', 'ok': login_ok, 'detail': login_detail})
 
     return checks
+
+
+def _check_registry_login(engine):
+    """Is the current user logged in to registry.redhat.io? Engine-aware.
+
+    podman supports `login --get-login`; docker does NOT — so for docker we read
+    the auth file directly. Runs in the server's user context: if you started the
+    Studio with sudo, this checks root's credentials (which the root build uses).
+    """
+    reg = 'registry.redhat.io'
+    is_root = hasattr(os, 'geteuid') and os.geteuid() == 0
+    hint = f'sudo {engine} login {reg}' if is_root else f'{engine} login {reg}'
+    if not engine:
+        return False, 'no container engine found'
+
+    if engine == 'podman':
+        try:
+            r = subprocess.run([engine, 'login', '--get-login', reg],
+                               capture_output=True, text=True, timeout=5)
+            if r.returncode == 0:
+                return True, f'logged in as {r.stdout.strip()}'
+            return False, f'not logged in — run: {hint}'
+        except Exception as exc:
+            return False, str(exc)
+
+    # docker: inspect the auth config (docker has no --get-login)
+    cfg_dir = os.environ.get('DOCKER_CONFIG') or os.path.expanduser('~/.docker')
+    cfg_path = os.path.join(cfg_dir, 'config.json')
+    try:
+        with open(cfg_path) as fh:
+            data = json.load(fh)
+    except FileNotFoundError:
+        return False, f'no auth file at {cfg_path} — run: {hint}'
+    except Exception as exc:
+        return False, f'{cfg_path}: {exc}'
+    auths = data.get('auths', {})
+    if reg in auths and auths[reg]:
+        return True, f'credentials present in {cfg_path}'
+    if data.get('credsStore') or (data.get('credHelpers', {}).get(reg)):
+        return True, f'credential helper in use ({cfg_path}) — assuming logged in'
+    return False, f'no {reg} entry in {cfg_path} — run: {hint}'
 
 
 def _find_artifact(out_dir, fmt):
