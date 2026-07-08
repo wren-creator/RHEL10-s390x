@@ -164,6 +164,11 @@ The admin password is set to `Ch@ngeMe1st!` and expires on first login. You will
 | Image tag | Tag applied to the local image (e.g. `latest`, `v1.0`). |
 | Output directory | Where `bootc-image-builder` writes the finished image file (default: `/var/tmp/bootc-output`). |
 | HTTP proxy | Leave blank if not needed. Sets `http_proxy` / `https_proxy` / `no_proxy` in the script. |
+| Local package repo URL | Your internal mirror (e.g. `https://repo.internal.corp/rhel10/$basearch/`). The Studio writes a `[localrepo]` with `priority=1` and copies it into the image *before* the `dnf install`, so packages install from your mirror first and the RHEL CDN is only a backup. `$basearch` is expanded by dnf at build time. |
+
+> **Tip:** If your mirror carries every package the image needs, a local repo largely
+> removes the RHEL-CDN entitlement requirement for cross-builds — the base image still
+> comes from `registry.redhat.io` (needs a login), but the package layer stays internal.
 
 ---
 

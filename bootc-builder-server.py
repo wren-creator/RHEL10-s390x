@@ -1174,6 +1174,11 @@ PAGE = r"""<!DOCTYPE html>
         <input type="text" name="proxy" placeholder="http://10.0.0.1:8080">
         <span class="hint">Leave blank if not needed</span>
       </div>
+      <div class="field">
+        <label>Local package repo URL (optional)</label>
+        <input type="text" name="local_repo_url" placeholder="https://repo.internal.corp/rhel10/$basearch/">
+        <span class="hint">Your internal mirror — packages install from here first (<code>priority=1</code>); RHEL CDN is used only as a backup. Baked into the image.</span>
+      </div>
     </div>
   </div>
 
@@ -1527,6 +1532,7 @@ def generate_script(p):
     image_tag     = p.get('image_tag',     ['latest'])[0].strip()
     output_dir    = p.get('output_dir',    ['/var/tmp/bootc-output'])[0].strip()
     proxy         = p.get('proxy',         [''])[0].strip()
+    local_repo    = p.get('local_repo_url',[''])[0].strip()
     selinux_mode  = p.get('selinux_mode',  ['permissive'])[0].strip()
     fips          = p.get('fips',          ['off'])[0].strip()
 
@@ -1548,6 +1554,26 @@ export http_proxy="{proxy}"
 export https_proxy="{proxy}"
 export no_proxy="localhost,127.0.0.1,registry.redhat.io"
 """
+
+    # ── Local package repo (optional) ──────────────────────────────────────────
+    # When set, packages install from your internal mirror first (priority=1) and
+    # the RHEL CDN is only used as a backup for anything not mirrored.
+    if local_repo:
+        local_repo_write_step = f"""log "Writing local.repo (mirror: {local_repo})..."
+cat > "${{BUILD_CTX}}/local.repo" << 'EOF'
+[localrepo]
+name=Local package mirror
+baseurl={local_repo}
+enabled=1
+gpgcheck=0
+priority=1
+EOF"""
+        # COPY it in before the dnf install so the mirror is used at build time,
+        # and it stays in the image for later.
+        local_repo_cf_copy = "COPY local.repo /etc/yum.repos.d/local.repo"
+    else:
+        local_repo_write_step = ''
+        local_repo_cf_copy    = '# No local package repo configured'
 
     fips_param = " fips=1" if fips == "on" else ""
 
@@ -1901,6 +1927,8 @@ chmod 600 "${{BUILD_CTX}}/network/{net_filename}"
 log "Writing fstab..."
 printf '{fstab_content}\\n' > "${{BUILD_CTX}}/fstab"
 
+{local_repo_write_step}
+
 {dasd_write_step}
 
 {zipl_write_step}
@@ -1917,6 +1945,9 @@ chmod 600 "${{BUILD_CTX}}/ssh/authorized_keys"
 step "Writing Containerfile"
 cat > "${{BUILD_CTX}}/Containerfile" << 'CFEOF'
 FROM {base_img}
+
+# Local package mirror (priority=1) — used first, RHEL CDN as backup
+{local_repo_cf_copy}
 
 # Optional local RPMs
 COPY rpms/ /tmp/rpms/
