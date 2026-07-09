@@ -110,10 +110,11 @@ log "Attaching (no-op on Simple Content Access orgs)..."
 subscription-manager attach --auto >/dev/null 2>&1 || true
 
 log "Discovering s390x BaseOS/AppStream repos visible to this account..."
+# Match only the standard streams — EUS/E4S/AUS variants would mix update
+# streams and cause version skew in the harvested set.
 mapfile -t REPO_IDS < <(subscription-manager repos --list 2>/dev/null \
   | awk '/^Repo ID:/{print $3}' \
-  | grep -E 's390x.*(baseos|appstream).*-rpms$' \
-  | grep -vE 'debug|source')
+  | grep -E '^rhel-[0-9]+-for-s390x-(baseos|appstream)-rpms$')
 [ "${#REPO_IDS[@]}" -gt 0 ] || err "No s390x BaseOS/AppStream repos visible on this account — confirm it has an s390x-capable subscription attached"
 log "Enabling: ${REPO_IDS[*]}"
 for r in "${REPO_IDS[@]}"; do subscription-manager repos --enable="$r" >/dev/null; done
@@ -122,7 +123,10 @@ log "Ensuring dnf-plugins-core + createrepo_c..."
 dnf -y install dnf-plugins-core createrepo_c >/dev/null
 
 log "Downloading ${#PKG_ARR[@]} package(s) + full s390x dependency tree..."
-dnf download --resolve --alldeps --forcearch=s390x --destdir=/out "${PKG_ARR[@]}"
+# --disablerepo=ubi-*: resolve purely against the entitled RHEL s390x repos,
+# not the UBI subset baked into the harvester image.
+dnf download --resolve --alldeps --forcearch=s390x \
+    --disablerepo='ubi-*' --destdir=/out "${PKG_ARR[@]}"
 
 log "Building repo metadata..."
 createrepo_c /out >/dev/null
