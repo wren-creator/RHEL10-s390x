@@ -132,10 +132,25 @@ unregister() { subscription-manager unregister >/dev/null 2>&1 || true; }
 trap unregister EXIT
 
 if [ -f /tmp/corp-ca.pem ]; then
-  log "Trusting corporate CA cert (/tmp/corp-ca.pem)..."
+  log "Trusting corporate CA cert (system trust store)..."
   cp /tmp/corp-ca.pem /etc/pki/ca-trust/source/anchors/corp-ca.pem
   update-ca-trust extract
+  # subscription-manager does NOT use the system trust store — it validates
+  # against *.pem in /etc/rhsm/ca (ca_cert_dir in rhsm.conf). Without this
+  # copy, register fails with SSL: CERTIFICATE_VERIFY_FAILED behind a
+  # TLS-intercepting proxy even after update-ca-trust.
+  log "Trusting corporate CA cert (subscription-manager ca_cert_dir)..."
+  mkdir -p /etc/rhsm/ca
+  cp /tmp/corp-ca.pem /etc/rhsm/ca/corp-ca.pem
 fi
+
+# RHSM filters the repos it exposes by the registering system's architecture,
+# so an x86_64 harvester container hides the s390x content sets even on
+# accounts that plainly have them. Claim s390x via a facts override BEFORE
+# registering so the s390x BaseOS/AppStream repos become visible.
+log "Overriding system arch fact to s390x (RHSM filters repos by arch)..."
+mkdir -p /etc/rhsm/facts
+echo '{"uname.machine": "s390x"}' > /etc/rhsm/facts/harvester-arch.facts
 
 log "Registering with Red Hat..."
 if [ "$AUTH_MODE" = "key" ]; then
