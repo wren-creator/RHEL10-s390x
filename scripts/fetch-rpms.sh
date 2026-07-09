@@ -218,42 +218,67 @@ for r in "${REPO_IDS[@]}"; do subscription-manager repos --enable="$r" >/dev/nul
 # publishes for this stream.
 RELEASEVER_ARGS=()
 if [ "$STREAM" = "eus" ]; then
-  log "EUS stream — detecting the latest published minor release..."
-  latest="$(subscription-manager release --list 2>/dev/null \
-    | grep -Eo '[0-9]+\.[0-9]+' | sort -V | tail -1 || true)"
-  if [ -z "$latest" ]; then
-    # release --list is unreliable inside containers — read the CDN release
-    # listing directly with the entitlement cert (its own source of truth).
-    # Try the rhsm CA first (clean networks); fall back to the system trust
-    # store (TLS-intercepting proxies, where the corp CA lives).
-    major="$(sed -E 's/^rhel-([0-9]+)-.*/\1/' <<< "${REPO_IDS[0]}")"
-    cert="$(find /etc/pki/entitlement -name '*.pem' ! -name '*-key.pem' 2>/dev/null | head -1 || true)"
-    key="${cert%.pem}-key.pem"
-    if [ -n "$cert" ] && [ -f "$key" ]; then
-      listing_url="https://cdn.redhat.com/content/eus/rhel${major}/listing"
-      log "Falling back to the CDN listing: $listing_url"
-      latest="$( { curl -sf --cacert /etc/rhsm/ca/redhat-uep.pem --cert "$cert" --key "$key" "$listing_url" \
-                || curl -sf --cert "$cert" --key "$key" "$listing_url"; } 2>/dev/null \
-                | grep -E '^[0-9]+\.[0-9]+$' | sort -V | tail -1 || true)"
-    fi
-  fi
+  log "EUS stream — probing the CDN for a published minor release..."
+  major="$(sed -E 's/^rhel-([0-9]+)-.*/\1/' <<< "${REPO_IDS[0]}")"
+  cert="$(find /etc/pki/entitlement -name '*.pem' ! -name '*-key.pem' 2>/dev/null | head -1 || true)"
+  key="${cert%.pem}-key.pem"
+  [ -n "$cert" ] && [ -f "$key" ] || err "No entitlement cert/key pair found in /etc/pki/entitlement after registration"
+
+  # Take the baseos repo's real baseurl template from the redhat.repo that
+  # subscription-manager just wrote — no path guessing.
+  baseos_id="$(printf '%s\n' "${REPO_IDS[@]}" | grep baseos | head -1)"
+  base_tpl="$(awk -v id="[$baseos_id]" '$0==id{f=1;next} f&&/^\[/{exit} f&&/^baseurl/{print $3; exit}' \
+              /etc/yum.repos.d/redhat.repo)"
+  [ -n "$base_tpl" ] || err "Could not read a baseurl for $baseos_id from redhat.repo"
+
+  ent_curl() {  # entitlement-authenticated GET; prints HTTP code, 000 on failure
+    curl -s -o /dev/null -w '%{http_code}' --cacert /etc/rhsm/ca/redhat-uep.pem \
+         --cert "$cert" --key "$key" "$1" 2>/dev/null \
+      || curl -s -o /dev/null -w '%{http_code}' --cert "$cert" --key "$key" "$1" 2>/dev/null \
+      || echo 000
+  }
+
+  # Candidate minors: the CDN listing if reachable, else brute-force N.10..N.0.
+  cands="$( { curl -sf --cacert /etc/rhsm/ca/redhat-uep.pem --cert "$cert" --key "$key" \
+                "https://cdn.redhat.com/content/eus/rhel${major}/listing" \
+           || curl -sf --cert "$cert" --key "$key" \
+                "https://cdn.redhat.com/content/eus/rhel${major}/listing"; } 2>/dev/null \
+           | grep -E '^[0-9]+\.[0-9]+$' | sort -rV || true)"
+  [ -n "$cands" ] || cands="$(for i in $(seq 10 -1 0); do echo "${major}.${i}"; done)"
+
+  latest=""; last_code=""
+  for m in $cands; do
+    url="${base_tpl//\$releasever/$m}"; url="${url//\$basearch/s390x}/repodata/repomd.xml"
+    code="$(ent_curl "$url")"
+    log "  probe $m → HTTP $code"
+    if [ "$code" = "200" ]; then latest="$m"; break; fi
+    last_code="$code"
+  done
+
   if [ -n "$latest" ]; then
-    log "Pinning releasever to $latest"
+    log "Pinning releasever to $latest (verified against the CDN)"
     RELEASEVER_ARGS=(--releasever="$latest")
+  elif [ "$last_code" = "403" ]; then
+    err "The CDN rejected the entitlement client cert (HTTP 403 on every minor).
+    This usually means a TLS-intercepting proxy is terminating the connection to
+    cdn.redhat.com, which breaks certificate authentication — ask the network
+    team to bypass (not intercept) cdn.redhat.com, or run the harvest from a
+    host with direct egress."
   else
-    log "Could not detect a minor release — trying the default releasever"
+    err "No published minor found for the EUS stream (last HTTP code: ${last_code:-none}).
+    Check connectivity to cdn.redhat.com from inside the container."
   fi
 fi
 
 log "Ensuring dnf-plugins-core (UBI repos)..."
 # From the UBI subset only: the freshly enabled RHEL EUS repos would be
 # metadata-refreshed too and 404 without the releasever pin.
-dnf -y install --disablerepo='rhel-*' dnf-plugins-core >/dev/null
+dnf -y install --disablerepo='rhel-*' dnf-plugins-core
 
 log "Ensuring createrepo_c (entitled RHEL repos)..."
 # createrepo_c is NOT in the UBI repo subset — it has to come from the
 # entitled RHEL repos, releasever-pinned when on the EUS stream.
-dnf -y install --disablerepo='ubi-*' "${RELEASEVER_ARGS[@]}" createrepo_c >/dev/null
+dnf -y install --disablerepo='ubi-*' "${RELEASEVER_ARGS[@]}" createrepo_c
 
 log "Downloading ${#PKG_ARR[@]} package(s) + full s390x dependency tree..."
 # --disablerepo=ubi-*: resolve purely against the entitled RHEL s390x repos,
