@@ -15,6 +15,13 @@ LOGFILE="$HERE/studio.log"
 PORT=8080
 
 PY="$(command -v python3 || command -v python || true)"
+HAVE_LSOF="$(command -v lsof || true)"
+
+# PID(s) listening on $PORT; empty if none or if lsof is unavailable.
+port_pid() {
+  [ -n "$HAVE_LSOF" ] || return 0
+  lsof -tiTCP:"$PORT" -sTCP:LISTEN 2>/dev/null || true
+}
 
 is_running() {
   [ -f "$PIDFILE" ] || return 1
@@ -26,7 +33,9 @@ show_url() {
   # The server logs its LAN URL on startup; surface it plus localhost.
   local lan; lan="$(grep -oE 'http://[0-9.]+:[0-9]+' "$LOGFILE" 2>/dev/null | tail -1 || true)"
   echo "  → http://localhost:$PORT"
-  [ -n "$lan" ] && echo "  → $lan   (from other machines on your network)"
+  if [ -n "$lan" ]; then
+    echo "  → $lan   (from other machines on your network)"
+  fi
 }
 
 start() {
@@ -42,7 +51,9 @@ start() {
   fi
 
   # Already running under a different/no PID file?
-  existing_pid=$(pgrep -f "bootc-builder-server.py" | head -n1)
+  # (|| true: pgrep exits 1 on no match, which set -e would turn into a
+  # silent script exit.)
+  existing_pid=$(pgrep -f "bootc-builder-server.py" | head -n1 || true)
   if [[ -n "$existing_pid" ]]; then
     echo "Image Mode Studio already running (pid $existing_pid)."
     show_url
@@ -50,7 +61,7 @@ start() {
   fi
 
   # Something else already holds the port?
-  existing_pid=$(lsof -tiTCP:"$PORT" -sTCP:LISTEN 2>/dev/null)
+  existing_pid=$(port_pid)
   if [[ -n "$existing_pid" ]]; then
     echo "✗ Cannot start Image Mode Studio."
     echo
@@ -70,18 +81,29 @@ start() {
   echo "$pid" >"$PIDFILE"
 
   # Wait up to 10s for the server to actually bind the port (not just launch).
-  for _ in {1..10}; do
-    if ! kill -0 "$pid" 2>/dev/null; then
-      break   # process died
-    fi
-    if lsof -tiTCP:"$PORT" -sTCP:LISTEN >/dev/null 2>&1; then
-      echo "✓ Started (pid $pid)."
+  # Without lsof we can't see the LISTEN state — fall back to "alive after 1s".
+  if [[ -z "$HAVE_LSOF" ]]; then
+    sleep 1
+    if kill -0 "$pid" 2>/dev/null; then
+      echo "✓ Started (pid $pid). (lsof not found — port check skipped)"
       show_url
       echo "  logs: ./studio.sh logs"
       return 0
     fi
-    sleep 1
-  done
+  else
+    for _ in {1..10}; do
+      if ! kill -0 "$pid" 2>/dev/null; then
+        break   # process died
+      fi
+      if [[ -n "$(port_pid)" ]]; then
+        echo "✓ Started (pid $pid)."
+        show_url
+        echo "  logs: ./studio.sh logs"
+        return 0
+      fi
+      sleep 1
+    done
+  fi
 
   echo "✗ Failed to start — last log lines:"
   echo
@@ -147,9 +169,9 @@ stop() {
     fi
   done
 
-  # 7. Verify the port is actually free.
+  # 7. Verify the port is actually free (needs lsof; skipped without it).
   sleep 1
-  if lsof -iTCP:"$PORT" -sTCP:LISTEN >/dev/null 2>&1; then
+  if [[ -n "$(port_pid)" ]]; then
     echo "WARNING: Port $PORT is still in use:"
     lsof -iTCP:"$PORT" -sTCP:LISTEN
     return 1
