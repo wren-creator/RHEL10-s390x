@@ -27,6 +27,8 @@
 #   ./scripts/fetch-rpms.sh --packages "vim,curl"   # override the package set
 #   ./scripts/fetch-rpms.sh --dest /path/to/cache   # override the output dir
 #   ./scripts/fetch-rpms.sh --ca-cert /etc/ssl/certs/corp-root-ca.pem
+#   ./scripts/fetch-rpms.sh --diagnose      # register + report what the
+#                                           # subscription can see, no download
 #
 # Auth:
 #   Interactive (default) — prompts for your Red Hat username; password is
@@ -59,11 +61,13 @@ err()  { echo -e "${RED}[✗]${NC} $*" >&2; exit 1; }
 step() { echo -e "\n${CYN}══${NC} $* ${CYN}══${NC}"; }
 
 PACKAGES=""
+DIAGNOSE=0
 while [ $# -gt 0 ]; do
   case "$1" in
     --packages) PACKAGES="$2"; shift 2 ;;
     --dest)     CACHE_DIR="$2"; shift 2 ;;
     --ca-cert)  CA_CERT_FILE="$2"; shift 2 ;;
+    --diagnose) DIAGNOSE=1; shift ;;
     -h|--help)  sed -n '2,46p' "$0"; exit 0 ;;
     *) err "Unknown argument: $1 (see --help)" ;;
   esac
@@ -160,13 +164,46 @@ fi
 log "Attaching (no-op on Simple Content Access orgs)..."
 subscription-manager attach --auto >/dev/null 2>&1 || true
 
+subscription_report() {
+  echo "──────────────── SUBSCRIPTION DIAGNOSIS ────────────────"
+  echo "--- identity (account/org this registration landed in) ---"
+  subscription-manager identity 2>&1 || true
+  echo "--- status (look for: Content Access Mode) ---"
+  subscription-manager status 2>&1 || true
+  echo "--- ALL visible repos mentioning s390x (any stream) ---"
+  subscription-manager repos --list 2>/dev/null \
+    | awk '/^Repo ID:/{print $3}' | grep -i s390x || echo "(none)"
+  echo "--- total repos visible to this registration ---"
+  subscription-manager repos --list 2>/dev/null | grep -c '^Repo ID:' || true
+  echo "--- available pools mentioning s390x / IBM Z ---"
+  subscription-manager list --available --all 2>/dev/null \
+    | grep -iE -B3 -A6 's390|ibm z|system z' || echo "(none)"
+  echo "--- currently consumed subscriptions ---"
+  subscription-manager list --consumed 2>/dev/null \
+    | grep -iE '^(subscription name|sku|provides arch)' || echo "(none)"
+  echo "────────────────────────────────────────────────────────"
+}
+
+if [ "${DIAGNOSE:-0}" = "1" ]; then
+  subscription_report
+  log "Diagnosis complete — no packages downloaded (drop --diagnose to harvest)."
+  exit 0
+fi
+
 log "Discovering s390x BaseOS/AppStream repos visible to this account..."
 # Match only the standard streams — EUS/E4S/AUS variants would mix update
 # streams and cause version skew in the harvested set.
 mapfile -t REPO_IDS < <(subscription-manager repos --list 2>/dev/null \
   | awk '/^Repo ID:/{print $3}' \
   | grep -E '^rhel-[0-9]+-for-s390x-(baseos|appstream)-rpms$')
-[ "${#REPO_IDS[@]}" -gt 0 ] || err "No s390x BaseOS/AppStream repos visible on this account — confirm it has an s390x-capable subscription attached"
+if [ "${#REPO_IDS[@]}" -eq 0 ]; then
+  subscription_report
+  err "No standard s390x BaseOS/AppStream repos matched. The report above shows
+    what this registration CAN see — if s390x repos appear there under other
+    names (eus/e4s/beta), the filter can be widened; if none appear at all and
+    Content Access Mode is not Simple Content Access, the account/org has no
+    s390x entitlement attached."
+fi
 log "Enabling: ${REPO_IDS[*]}"
 for r in "${REPO_IDS[@]}"; do subscription-manager repos --enable="$r" >/dev/null; done
 
@@ -195,6 +232,7 @@ TTY_ARGS=(-i)
 # the same layer the Studio's cross-builds already use.
 RUN_ARGS=(--rm "${TTY_ARGS[@]}"
   --platform linux/s390x
+  -e DIAGNOSE="$DIAGNOSE"
   -e AUTH_MODE="$AUTH_MODE"
   -e RH_USERNAME="$RH_USERNAME"
   -e RH_ORG="${RH_ORG:-}"
