@@ -6,6 +6,7 @@ __pycache__/
 .studio.pid
 studio.log
 studio.log.err
+.buildkitd.toml
 
 # Build output (RAW/qcow2 images can be multi-GB)
 output/

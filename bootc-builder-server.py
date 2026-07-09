@@ -111,24 +111,91 @@ def ensure_build_engine(engine, arch, emit):
     return _ensure_podman_binfmt(arch, emit)
 
 
+def _studio_ca_cert(emit=None):
+    """Path from STUDIO_CA_CERT if set and readable, else ''."""
+    ca_cert = os.environ.get('STUDIO_CA_CERT', '').strip()
+    if ca_cert and not os.path.isfile(ca_cert):
+        if emit:
+            emit(f"[infra] STUDIO_CA_CERT set but not found: {ca_cert} — ignoring. "
+                 "(Running under sudo? Use sudo -E to preserve the variable.)")
+        return ''
+    return ca_cert
+
+
+def _buildx_container_name():
+    return f"buildx_buildkit_{BUILDX_BUILDER_NAME}0"
+
+
+def _buildx_has_registry_ca():
+    """True if the builder container holds registry CA certs from a
+    buildkitd.toml --config (buildx copies them to /etc/buildkit/certs)."""
+    rc = subprocess.run(
+        ['docker', 'exec', _buildx_container_name(), 'sh', '-c',
+         'ls /etc/buildkit/certs 2>/dev/null | grep -q .'],
+        capture_output=True,
+    ).returncode
+    return rc == 0
+
+
+def _write_buildkitd_config(ca_cert):
+    """Write a buildkitd.toml trusting ca_cert for the Red Hat registries.
+
+    This is BuildKit's official per-registry CA mechanism: buildx copies the
+    referenced cert into the builder container at create time, so the trust
+    is part of the builder itself — unlike exec-ing update-ca-certificates
+    into the (Alpine-based, sometimes tool-less) container after the fact,
+    which does not survive the builder being recreated.
+    """
+    path = os.path.join(APP_DIR, '.buildkitd.toml')
+    stanzas = []
+    for registry in ('registry.redhat.io', 'registry.access.redhat.com'):
+        stanzas.append(f'[registry."{registry}"]\n  ca=["{ca_cert}"]\n')
+    with open(path, 'w') as f:
+        f.write('\n'.join(stanzas))
+    return path
+
+
 def _ensure_docker_buildx(arch, emit):
-    """Ensure an isolated docker-container buildx builder registers linux/<arch>."""
+    """Ensure an isolated docker-container buildx builder registers linux/<arch>.
+
+    The docker-container driver runs BuildKit in its own container with its
+    own trust store — separate from the host docker CLI. On networks that
+    TLS-intercept through a corporate root CA (STUDIO_CA_CERT), the FROM-image
+    pull ("load metadata for registry.redhat.io/...") fails with x509 errors
+    even when `docker pull` works on the host, so the builder must be created
+    with a buildkitd.toml that trusts the CA for the Red Hat registries. A
+    builder that exists but lacks the CA is torn down and recreated.
+    """
     platform_tag = f"linux/{arch}"
+    ca_cert = _studio_ca_cert(emit)
+
     check = subprocess.run(
         ['docker', 'buildx', 'inspect', BUILDX_BUILDER_NAME],
         capture_output=True, text=True,
     )
-    if platform_tag in check.stdout:
+    healthy = platform_tag in check.stdout
+    if healthy and ca_cert and not _buildx_has_registry_ca():
+        emit(f"[infra] Builder '{BUILDX_BUILDER_NAME}' lacks the corporate CA "
+             "(STUDIO_CA_CERT) — realignment required.")
+        healthy = False
+    if healthy:
         emit(f"[infra] buildx '{BUILDX_BUILDER_NAME}' already registers {platform_tag} — no change.")
-        return _ensure_buildx_ca_trust(emit)
+        return True
 
     emit(f"[infra] Realignment required — registering {platform_tag} execution layer...")
     subprocess.run(['docker', 'buildx', 'rm', BUILDX_BUILDER_NAME],
                    capture_output=True, text=True)
+
+    create_cmd = ['docker', 'buildx', 'create', '--name', BUILDX_BUILDER_NAME,
+                  '--driver', 'docker-container', '--use']
+    if ca_cert:
+        cfg = _write_buildkitd_config(ca_cert)
+        create_cmd += ['--config', cfg]
+        emit(f"[infra] Embedding corporate CA for the Red Hat registries ({cfg})...")
+
     steps = [
         ['docker', 'run', '--privileged', '--rm', 'tonistiigi/binfmt', '--install', 'all'],
-        ['docker', 'buildx', 'create', '--name', BUILDX_BUILDER_NAME,
-         '--driver', 'docker-container', '--use'],
+        create_cmd,
         ['docker', 'buildx', 'inspect', '--bootstrap'],
     ]
     for cmd in steps:
@@ -137,52 +204,6 @@ def _ensure_docker_buildx(arch, emit):
             emit(f"[infra] Step failed (rc={rc}) — aborting engine prep.")
             return False
     emit("[infra] Mainframe cross-compilation layer established.")
-    return _ensure_buildx_ca_trust(emit)
-
-
-def _ensure_buildx_ca_trust(emit):
-    """Inject a corporate root CA (STUDIO_CA_CERT) into the buildx builder
-    container, if configured.
-
-    The docker-container driver runs BuildKit inside its own isolated
-    container with its own trust store — separate from the host's docker CLI
-    and from anything mounted into a one-off build container. A TLS-
-    inspecting corporate proxy therefore breaks the FROM-image pull ("load
-    metadata") step even when `docker pull` on the host works fine. Re-run on
-    every ensure_build_engine() pass (including the no-op path) so this
-    survives the builder getting recreated, e.g. after Docker Desktop clears
-    binfmt state.
-    """
-    ca_cert = os.environ.get('STUDIO_CA_CERT', '').strip()
-    if not ca_cert:
-        return True
-    if not os.path.isfile(ca_cert):
-        emit(f"[infra] STUDIO_CA_CERT set but not found: {ca_cert} — skipping CA trust step.")
-        return True
-
-    container = f"buildx_buildkit_{BUILDX_BUILDER_NAME}0"
-    running = subprocess.run(
-        ['docker', 'ps', '-q', '--filter', f'name=^{container}$'],
-        capture_output=True, text=True,
-    )
-    if not running.stdout.strip():
-        emit(f"[infra] Builder container '{container}' not running — skipping CA trust step.")
-        return True
-
-    emit(f"[infra] Trusting corporate CA in the buildx builder ({container})...")
-    steps = [
-        ['docker', 'cp', ca_cert, f'{container}:/usr/local/share/ca-certificates/studio-ca.crt'],
-        ['docker', 'exec', container, 'update-ca-certificates'],
-        ['docker', 'restart', container],
-        ['docker', 'buildx', 'inspect', '--bootstrap'],
-    ]
-    for cmd in steps:
-        rc = _run_streamed(cmd, emit)
-        if rc != 0:
-            emit(f"[infra] CA trust step failed (rc={rc}) — builder may still hit TLS "
-                 "errors pulling from registry.redhat.io.")
-            return True   # builder is still usable; don't block engine prep over this
-    emit("[infra] Corporate CA trusted in buildx builder.")
     return True
 
 
@@ -281,6 +302,16 @@ def run_preflight():
     repo_ok = os.path.isfile('/etc/yum.repos.d/redhat.repo')
     add('redhat.repo', 'ok' if repo_ok else 'warn',
         'present' if repo_ok else f'not present{advisory}')
+
+    # Corporate CA (TLS-intercepting proxy networks). Shows whether the env var
+    # actually reached the server — the usual failure is sudo without -E.
+    ca_raw = os.environ.get('STUDIO_CA_CERT', '').strip()
+    if ca_raw:
+        ca_ok = os.path.isfile(ca_raw)
+        add('corporate CA (STUDIO_CA_CERT)',
+            'ok' if ca_ok else 'warn',
+            ca_raw if ca_ok
+            else f'{ca_raw} — file not found (server running as a user that cannot see it?)')
 
     try:
         sock = _socket.create_connection(('registry.redhat.io', 443), timeout=5)
