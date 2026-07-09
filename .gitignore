@@ -10,3 +10,7 @@ studio.log.err
 # Build output (RAW/qcow2 images can be multi-GB)
 output/
 bootc-output/
+
+# Harvested RPM cache (pulled via your own Red Hat entitlement — not ours to
+# redistribute via git)
+rpm-cache/

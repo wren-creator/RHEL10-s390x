@@ -1,0 +1,21 @@
+# Package list for the s390x bootc image (LVM storage, non-FIPS default).
+# One package per line. Blank lines and lines starting with # are ignored.
+# Keep in sync with the `pkgs` list in bootc-builder-server.py for the
+# is_s390x / storage=lvm branch.
+
+openssh-server
+vim
+curl
+chrony
+rsyslog
+policycoreutils
+dracut
+NetworkManager
+util-linux
+s390utils-base
+zipl
+lvm2
+qemu-guest-agent
+
+# Uncomment if building with fips=on:
+# crypto-policies-scripts
