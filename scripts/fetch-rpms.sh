@@ -191,30 +191,55 @@ if [ "${DIAGNOSE:-0}" = "1" ]; then
 fi
 
 log "Discovering s390x BaseOS/AppStream repos visible to this account..."
-# Match only the standard streams — EUS/E4S/AUS variants would mix update
-# streams and cause version skew in the harvested set.
-mapfile -t REPO_IDS < <(subscription-manager repos --list 2>/dev/null \
-  | awk '/^Repo ID:/{print $3}' \
-  | grep -E '^rhel-[0-9]+-for-s390x-(baseos|appstream)-rpms$')
+# Prefer the standard streams; fall back to EUS when a subscription carries
+# only EUS s390x content. Never mix streams in one harvest.
+ALL_IDS="$(subscription-manager repos --list 2>/dev/null | awk '/^Repo ID:/{print $3}')"
+STREAM=standard
+mapfile -t REPO_IDS < <(grep -E '^rhel-[0-9]+-for-s390x-(baseos|appstream)-rpms$' <<<"$ALL_IDS" || true)
+if [ "${#REPO_IDS[@]}" -eq 0 ]; then
+  mapfile -t REPO_IDS < <(grep -E '^rhel-[0-9]+-for-s390x-(baseos|appstream)-eus-rpms$' <<<"$ALL_IDS" || true)
+  if [ "${#REPO_IDS[@]}" -gt 0 ]; then
+    STREAM=eus
+    log "Standard streams not in this subscription — using EUS streams"
+  fi
+fi
 if [ "${#REPO_IDS[@]}" -eq 0 ]; then
   subscription_report
-  err "No standard s390x BaseOS/AppStream repos matched. The report above shows
-    what this registration CAN see — if s390x repos appear there under other
-    names (eus/e4s/beta), the filter can be widened; if none appear at all and
-    Content Access Mode is not Simple Content Access, the account/org has no
-    s390x entitlement attached."
+  err "No s390x BaseOS/AppStream repos matched (standard or EUS). The report
+    above shows what this registration CAN see — if s390x repos appear there
+    under other names, the filter can be widened; if none appear at all, the
+    account/org has no s390x entitlement attached."
 fi
 log "Enabling: ${REPO_IDS[*]}"
 for r in "${REPO_IDS[@]}"; do subscription-manager repos --enable="$r" >/dev/null; done
 
+# EUS content lives under per-minor-release CDN paths (e.g. .../rhel10/10.2/...),
+# so the generic releasever "10" would 404 — pin to the newest minor Red Hat
+# publishes for this stream.
+RELEASEVER_ARGS=()
+if [ "$STREAM" = "eus" ]; then
+  log "EUS stream — detecting the latest published minor release..."
+  latest="$(subscription-manager release --list 2>/dev/null \
+    | grep -Eo '[0-9]+\.[0-9]+' | sort -V | tail -1 || true)"
+  if [ -n "$latest" ]; then
+    log "Pinning releasever to $latest"
+    RELEASEVER_ARGS=(--releasever="$latest")
+  else
+    log "Could not detect a minor release — trying the default releasever"
+  fi
+fi
+
 log "Ensuring dnf-plugins-core + createrepo_c..."
-dnf -y install dnf-plugins-core createrepo_c >/dev/null
+# Tooling comes from the UBI repos only: the freshly enabled RHEL repos would
+# otherwise be metadata-refreshed here too, and an EUS baseurl 404s without
+# the releasever pin (which must not apply to this install).
+dnf -y install --disablerepo='rhel-*' dnf-plugins-core createrepo_c >/dev/null
 
 log "Downloading ${#PKG_ARR[@]} package(s) + full s390x dependency tree..."
 # --disablerepo=ubi-*: resolve purely against the entitled RHEL s390x repos,
 # not the UBI subset baked into the harvester image.
 dnf download --resolve --alldeps --forcearch=s390x \
-    --disablerepo='ubi-*' --destdir=/out "${PKG_ARR[@]}"
+    --disablerepo='ubi-*' "${RELEASEVER_ARGS[@]}" --destdir=/out "${PKG_ARR[@]}"
 
 log "Building repo metadata..."
 createrepo_c /out >/dev/null
