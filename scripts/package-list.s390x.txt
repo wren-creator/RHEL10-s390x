@@ -12,8 +12,9 @@ policycoreutils
 dracut
 NetworkManager
 util-linux
+# zipl ships inside s390utils-core (dependency of s390utils-base) — there is
+# no standalone "zipl" package, so don't list one.
 s390utils-base
-zipl
 lvm2
 qemu-guest-agent
 

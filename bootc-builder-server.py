@@ -1667,7 +1667,10 @@ cp -a "{rpm_cache_dir}/." "${{BUILD_CTX}}/rpms/\""""
         "      NetworkManager", "      util-linux",
     ]
     if is_s390x:
-        pkgs += ["      s390utils-base", "      zipl"]
+        # zipl itself ships in s390utils-core, pulled in by s390utils-base —
+        # there is no standalone "zipl" package, and naming one fails the
+        # whole dnf transaction.
+        pkgs += ["      s390utils-base"]
     elif arch == 'x86_64':
         pkgs += ["      grub2", "      grub2-pc", "      grub2-efi-x64", "      grub2-efi-x64-modules"]
     else:  # aarch64

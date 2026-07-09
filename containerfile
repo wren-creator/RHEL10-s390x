@@ -13,7 +13,6 @@ RUN dnf -y install \
       rsyslog \
       policycoreutils \
       s390utils-base \
-      zipl \
       dracut \
       NetworkManager \
       qemu-guest-agent \
