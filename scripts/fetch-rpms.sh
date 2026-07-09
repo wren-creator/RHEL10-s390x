@@ -221,6 +221,22 @@ if [ "$STREAM" = "eus" ]; then
   log "EUS stream — detecting the latest published minor release..."
   latest="$(subscription-manager release --list 2>/dev/null \
     | grep -Eo '[0-9]+\.[0-9]+' | sort -V | tail -1 || true)"
+  if [ -z "$latest" ]; then
+    # release --list is unreliable inside containers — read the CDN release
+    # listing directly with the entitlement cert (its own source of truth).
+    # Try the rhsm CA first (clean networks); fall back to the system trust
+    # store (TLS-intercepting proxies, where the corp CA lives).
+    major="$(sed -E 's/^rhel-([0-9]+)-.*/\1/' <<< "${REPO_IDS[0]}")"
+    cert="$(find /etc/pki/entitlement -name '*.pem' ! -name '*-key.pem' 2>/dev/null | head -1 || true)"
+    key="${cert%.pem}-key.pem"
+    if [ -n "$cert" ] && [ -f "$key" ]; then
+      listing_url="https://cdn.redhat.com/content/eus/rhel${major}/listing"
+      log "Falling back to the CDN listing: $listing_url"
+      latest="$( { curl -sf --cacert /etc/rhsm/ca/redhat-uep.pem --cert "$cert" --key "$key" "$listing_url" \
+                || curl -sf --cert "$cert" --key "$key" "$listing_url"; } 2>/dev/null \
+                | grep -E '^[0-9]+\.[0-9]+$' | sort -V | tail -1 || true)"
+    fi
+  fi
   if [ -n "$latest" ]; then
     log "Pinning releasever to $latest"
     RELEASEVER_ARGS=(--releasever="$latest")
@@ -229,11 +245,15 @@ if [ "$STREAM" = "eus" ]; then
   fi
 fi
 
-log "Ensuring dnf-plugins-core + createrepo_c..."
-# Tooling comes from the UBI repos only: the freshly enabled RHEL repos would
-# otherwise be metadata-refreshed here too, and an EUS baseurl 404s without
-# the releasever pin (which must not apply to this install).
-dnf -y install --disablerepo='rhel-*' dnf-plugins-core createrepo_c >/dev/null
+log "Ensuring dnf-plugins-core (UBI repos)..."
+# From the UBI subset only: the freshly enabled RHEL EUS repos would be
+# metadata-refreshed too and 404 without the releasever pin.
+dnf -y install --disablerepo='rhel-*' dnf-plugins-core >/dev/null
+
+log "Ensuring createrepo_c (entitled RHEL repos)..."
+# createrepo_c is NOT in the UBI repo subset — it has to come from the
+# entitled RHEL repos, releasever-pinned when on the EUS stream.
+dnf -y install --disablerepo='ubi-*' "${RELEASEVER_ARGS[@]}" createrepo_c >/dev/null
 
 log "Downloading ${#PKG_ARR[@]} package(s) + full s390x dependency tree..."
 # --disablerepo=ubi-*: resolve purely against the entitled RHEL s390x repos,
