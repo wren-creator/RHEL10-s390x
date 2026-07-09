@@ -21,6 +21,10 @@ import uuid
 
 PORT = 8080
 
+# Project root — used to locate the harvested RPM cache (scripts/fetch-rpms.sh
+# writes to rpm-cache/<arch>/ here) regardless of the server's CWD.
+APP_DIR = os.path.dirname(os.path.abspath(__file__))
+
 # Name of the isolated buildx builder used for cross-arch (docker path).
 BUILDX_BUILDER_NAME = "mainframe-builder"
 # Where per-build RAW/image artifacts are written (one subdir per job).
@@ -1593,27 +1597,66 @@ export no_proxy="localhost,127.0.0.1,registry.redhat.io"
 """
 
     # ── Local package repo (optional) ──────────────────────────────────────────
-    # When set, packages install from your internal mirror first (priority=1) and
-    # the RHEL CDN is only used as a backup for anything not mirrored.
+    # Two independent local sources, both preferred over the RHEL CDN:
+    #   1. A harvested RPM cache (scripts/fetch-rpms.sh → rpm-cache/<arch>/, with
+    #      real repo metadata) — highest priority, baked in as file:///tmp/rpms.
+    #   2. An internal mirror URL (local_repo_url from the form), if set.
+    # The RHEL CDN (if entitled) is only used as a backup for anything neither
+    # local source has.
     repo_insecure = p.get('repo_insecure', ['off'])[0].strip()   # 'on' → sslverify=0
     sslverify_val = '0' if repo_insecure == 'on' else '1'
+
+    rpm_cache_dir = os.path.join(APP_DIR, 'rpm-cache', arch)
+    has_rpm_cache = os.path.isfile(os.path.join(rpm_cache_dir, 'repodata', 'repomd.xml'))
+
+    repo_stanzas = []
+    if has_rpm_cache:
+        repo_stanzas.append("""[harvested-cache]
+name=Harvested RPM cache (scripts/fetch-rpms.sh)
+baseurl=file:///tmp/rpms
+enabled=1
+gpgcheck=0
+priority=1""")
     if local_repo:
-        local_repo_write_step = f"""log "Writing local.repo (mirror: {local_repo}, sslverify={sslverify_val})..."
-cat > "${{BUILD_CTX}}/local.repo" << 'EOF'
-[localrepo]
+        mirror_priority = 2 if has_rpm_cache else 1
+        repo_stanzas.append(f"""[localrepo]
 name=Local package mirror
 baseurl={local_repo}
 enabled=1
 gpgcheck=0
 sslverify={sslverify_val}
-priority=1
+priority={mirror_priority}""")
+
+    if repo_stanzas:
+        repo_note = (f'mirror: {local_repo}, sslverify={sslverify_val}' if local_repo else '') \
+                    + (', ' if (local_repo and has_rpm_cache) else '') \
+                    + ('harvested cache: ' + rpm_cache_dir if has_rpm_cache else '')
+        local_repo_write_step = f"""log "Writing local.repo ({repo_note})..."
+cat > "${{BUILD_CTX}}/local.repo" << 'EOF'
+{(chr(10) * 2).join(repo_stanzas)}
 EOF"""
-        # COPY it in before the dnf install so the mirror is used at build time,
-        # and it stays in the image for later.
+        # COPY it in before the dnf install so it's used at build time, and it
+        # stays in the image for later.
         local_repo_cf_copy = "COPY local.repo /etc/yum.repos.d/local.repo"
     else:
         local_repo_write_step = ''
         local_repo_cf_copy    = '# No local package repo configured'
+
+    # Copy the harvested cache (RPMs + repodata) into the build context so the
+    # file:///tmp/rpms baseurl above resolves once it's COPY'd into the image.
+    if has_rpm_cache:
+        rpm_cache_copy_step = f"""log "Copying harvested RPM cache from {rpm_cache_dir}..."
+cp -a "{rpm_cache_dir}/." "${{BUILD_CTX}}/rpms/\""""
+        # Full dependency tree + repo metadata is already in /tmp/rpms via the
+        # harvested-cache repo — a blind `rpm -Uvh` over the same files would
+        # skip dnf's dependency/ordering resolution, so skip it.
+        rpm_install_line = ('# RPMs installed via the [harvested-cache] repo above '
+                            '(dependency-resolved by dnf, see scripts/fetch-rpms.sh)')
+    else:
+        rpm_cache_copy_step = (f'warn "No harvested RPM cache at {rpm_cache_dir} — run '
+                               'scripts/fetch-rpms.sh, or packages will need the RHEL CDN '
+                               '(entitlement) or a local_repo_url mirror"')
+        rpm_install_line = 'RUN rpm -Uvh /tmp/rpms/*.rpm 2>/dev/null || true'
 
     fips_param = " fips=1" if fips == "on" else ""
 
@@ -1967,6 +2010,8 @@ chmod 600 "${{BUILD_CTX}}/network/{net_filename}"
 log "Writing fstab..."
 printf '{fstab_content}\\n' > "${{BUILD_CTX}}/fstab"
 
+{rpm_cache_copy_step}
+
 {local_repo_write_step}
 
 {dasd_write_step}
@@ -1986,12 +2031,12 @@ step "Writing Containerfile"
 cat > "${{BUILD_CTX}}/Containerfile" << 'CFEOF'
 FROM {base_img}
 
-# Local package mirror (priority=1) — used first, RHEL CDN as backup
+# Local package sources (harvested cache, then mirror) — used first, RHEL CDN as backup
 {local_repo_cf_copy}
 
-# Optional local RPMs
+# Optional local RPMs (harvested cache and/or hand-dropped RPMs)
 COPY rpms/ /tmp/rpms/
-RUN rpm -Uvh /tmp/rpms/*.rpm 2>/dev/null || true
+{rpm_install_line}
 
 # Install packages
 RUN dnf -y install \\
