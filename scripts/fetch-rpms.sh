@@ -205,14 +205,25 @@ RUN_ARGS=(--rm "${TTY_ARGS[@]}"
 )
 [ -n "$CA_CERT_FILE" ] && RUN_ARGS+=(-v "$CA_CERT_FILE:/tmp/corp-ca.pem:ro")
 
+step "Verifying s390x emulation ($ENGINE run --platform linux/s390x)"
+EMU_ARCH="$("$ENGINE" run --rm --platform linux/s390x "$UBI_IMAGE" uname -m 2>&1 | tail -1 || true)"
+if [ "$EMU_ARCH" != "s390x" ]; then
+  err "s390x emulation check failed (got: '$EMU_ARCH', expected: s390x).
+    The host lacks QEMU s390x binfmt for $ENGINE — click 'Prepare Build Engine'
+    in the Studio, or run:
+      sudo podman run --rm --privileged multiarch/qemu-user-static --reset -p yes
+    (docker: docker run --privileged --rm tonistiigi/binfmt --install all)
+    Note: if you prepared the engine with docker but $ENGINE is podman (or vice
+    versa), the emulation may be registered for the other engine's VM — rerun
+    the matching command above, or force the engine with STUDIO_ENGINE."
+fi
+log "Emulation OK — container reports $EMU_ARCH"
+
 step "Registering + harvesting inside a throwaway $UBI_IMAGE container (linux/s390x under QEMU)"
 if ! "$ENGINE" run "${RUN_ARGS[@]}" \
   "$UBI_IMAGE" \
   bash -c 'IFS=" " read -r -a PKG_ARR <<< "$PKG_ARR_STR"; source /harvest.sh'; then
-  err "Harvest failed. If the error was 'exec format error', the host lacks QEMU s390x
-    emulation — click 'Prepare Build Engine' in the Studio, or run:
-      sudo podman run --rm --privileged multiarch/qemu-user-static --reset -p yes
-    (docker: docker run --privileged --rm tonistiigi/binfmt --install all)"
+  err "Harvest failed — the real cause is in the container output above this line."
 fi
 
 step "Done"
