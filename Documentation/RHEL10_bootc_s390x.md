@@ -131,8 +131,8 @@ COPY network/qeth0.nmconnection /etc/NetworkManager/system-connections/qeth0.nmc
 COPY dasd.conf /etc/dasd.conf
 
 # First-boot LVM/DASD automation
-COPY firstboot-lvm.sh /usr/local/sbin/
-COPY firstboot-lvm.service /etc/systemd/system/
+COPY scripts/firstboot-lvm.sh /usr/local/sbin/
+COPY systemd/firstboot-lvm.service /etc/systemd/system/
 RUN chmod +x /usr/local/sbin/firstboot-lvm.sh \
   && systemctl enable firstboot-lvm.service
 

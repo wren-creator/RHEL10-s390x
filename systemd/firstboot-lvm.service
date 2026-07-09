@@ -1,0 +1,17 @@
+[Unit]
+Description=First-boot DASD + LVM provisioning
+After=network.target
+Before=local-fs.target
+ConditionPathExists=!/var/lib/firstboot-lvm.done
+DefaultDependencies=no
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/firstboot-lvm.sh
+ExecStartPost=/bin/touch /var/lib/firstboot-lvm.done
+RemainAfterExit=yes
+StandardOutput=journal+console
+StandardError=journal+console
+
+[Install]
+WantedBy=multi-user.target

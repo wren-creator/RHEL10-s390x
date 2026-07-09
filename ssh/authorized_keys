@@ -1,0 +1,2 @@
+# PLACEHOLDER — replace with your real public key before building:
+#   cat ~/.ssh/id_ed25519.pub > ssh/authorized_keys

@@ -14,3 +14,6 @@ bootc-output/
 # Harvested RPM cache (pulled via your own Red Hat entitlement — not ours to
 # redistribute via git)
 rpm-cache/
+
+# Hand-dropped RPMs for the manual build (keep the dir, not the packages)
+rpms/*.rpm
