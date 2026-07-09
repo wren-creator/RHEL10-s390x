@@ -44,6 +44,7 @@ hit this. Pick a strategy before you start:
 | **A** | **Mount entitlement certs copied from a subscribed RHEL box** | You have any subscribed RHEL system to copy from | Most faithful to production; a few manual steps (below) |
 | **B** | **Build a minimal image** (only packages already in `rhel-bootc`) | Pure smoke-test of the QEMU/buildx/RAW pipeline | Not a deployable image — trims the package list |
 | **C** | **Run the cross-build on a subscribed RHEL x86 VM instead** | You have a RHEL VM handy | Still QEMU cross-compile, but entitlements are native — least friction |
+| **D** | **Harvest the RPMs once with `scripts/fetch-rpms.sh`** | You have a Red Hat account but no entitled host or mirror | One-time interactive harvest; afterwards builds are fully offline (works with docker too — no cert mounts needed) |
 
 **Strategy A — podman in WSL with entitlements mounted (recommended for a real validation):**
 
@@ -75,6 +76,18 @@ and `dnf install` of `s390utils-base`/`zipl`/`lvm2` reaches the RHEL CDN.
 **Strategy B — minimal image:** in the Studio form, keep only base packages and skip
 `s390utils-base`/`zipl`/`lvm2` for the smoke test. The image won't boot on Z, but it proves
 the engine → RAW → download chain works.
+
+**Strategy D — one-time RPM harvest (best when you only have a Red Hat account):**
+
+```bash
+./scripts/fetch-rpms.sh        # prompts for your Red Hat username + password
+```
+
+This registers a disposable UBI container against your account, downloads the s390x package
+set + full dependency tree, and builds a local dnf repo at `rpm-cache/s390x/`. The Studio
+auto-detects the cache on the next build and wires it in as a `priority=1` repo — packages
+install fully offline, so this works even under **docker buildx** (no entitlement cert
+mounts required). Re-run the harvest only when you change the package list.
 
 ---
 

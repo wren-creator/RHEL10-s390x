@@ -56,7 +56,8 @@ IBM Z host (DASD)   ←──────── dasdfmt / fdasd / dd / zipl  ◄
 │   └── zipl.conf                         # IBM Z bootloader config
 ├── scripts/
 │   ├── firstboot-lvm.sh                  # First-boot DASD/LVM provisioning script
-│   └── build-and-deploy.sh               # End-to-end build automation script
+│   ├── fetch-rpms.sh                     # Harvest s390x RPMs with your Red Hat account (no entitled host needed)
+│   └── package-list.s390x.txt            # Package set for the image + harvester
 ├── systemd/
 │   └── firstboot-lvm.service             # Systemd unit for first-boot LVM setup
 ├── dasd.conf                             # DASD device persistence config
@@ -65,6 +66,7 @@ IBM Z host (DASD)   ←──────── dasdfmt / fdasd / dd / zipl  ◄
 ├── studio.sh                             # Start/stop the Studio (macOS/Linux)
 ├── studio.ps1                            # Start/stop the Studio (Windows)
 ├── rpms/                                 # Drop local RPMs here (optional, can be empty)
+├── rpm-cache/                            # Created by fetch-rpms.sh — local dnf repo, auto-used by builds (git-ignored)
 ├── RHEL10_bootc_s390x.md                 # General reference guide
 ├── Deploy_Guide.md                       # LPAR deployment runbook
 └── README.md
@@ -105,8 +107,14 @@ Then continue with **Phase B** ([`Deploy_Guide.md`](./Documentation/Deploy_Guide
 > **Cross-build note:** on a non-RHEL host (e.g. Windows), host entitlement certs
 > (`/etc/pki/entitlement`) don't exist, so they aren't mounted into the build. Layers that
 > `dnf install` from the RHEL CDN need an entitlement strategy (a subscribed builder, or a
-> registry pull secret). Packages already present in `rhel-bootc` build fine. Validate this
-> on your actual build host.
+> registry pull secret). Packages already present in `rhel-bootc` build fine.
+>
+> **No entitled host? Harvest the RPMs once instead.** `./scripts/fetch-rpms.sh` registers
+> a throwaway UBI container against **your own Red Hat account** (nothing touches the host),
+> downloads the full s390x package set + dependency tree, and builds a local dnf repo at
+> `rpm-cache/s390x/`. Every subsequent build auto-detects the cache and installs from it
+> fully offline — no entitlement needed at build time. Non-interactive use: set `RH_ORG` +
+> `RH_ACTIVATION_KEY`.
 
 ---
 
@@ -129,13 +137,16 @@ podman login registry.redhat.io
 
 2. **Verify device addresses** — check that the DASD address and qeth channel in `dasd.conf`, `zipl/zipl.conf`, and `network/qeth0.nmconnection` match your actual LPAR configuration.
 
-3. **Change the default password** — the containerfile sets `britley:changeme`. Update this before building for any non-test environment.
+3. **Change the default password** — the containerfile sets `test:changeme`. Update this before building for any non-test environment.
 
 ### Build
 
+Use the Studio's **Generate Script** button to produce a `build-and-deploy.sh`
+tailored to your configuration, then run it:
+
 ```bash
-chmod +x scripts/build-and-deploy.sh
-sudo ./scripts/build-and-deploy.sh
+chmod +x build-and-deploy.sh
+sudo ./build-and-deploy.sh
 ```
 
 Or manually:
