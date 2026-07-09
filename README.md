@@ -97,7 +97,10 @@ In the browser:
 1. **Run pre-flight checks** — confirms the container engine, host arch, and (for
    cross-builds) whether QEMU s390x emulation is registered.
 2. **Prepare Build Engine** — one click self-heals the `binfmt`/`buildx` layer so an
-   x86/ARM host can build s390x. Native s390x hosts skip this.
+   x86/ARM host can build s390x. Native s390x hosts skip this. On a network that
+   TLS-intercepts through a corporate root CA, set `STUDIO_CA_CERT=/path/to/ca.pem`
+   first — the docker buildx builder runs in its own isolated container and needs the
+   CA trusted separately from the host (see the Windows runbook's troubleshooting table).
 3. **Configure** — architecture, admin user + SSH key, DASD/qeth, storage, security.
 4. **Build Image** — streams live logs; on success a **Download** button appears with the
    RAW image. (Or **Generate Script** to run the same build yourself.)

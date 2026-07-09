@@ -120,7 +120,7 @@ def _ensure_docker_buildx(arch, emit):
     )
     if platform_tag in check.stdout:
         emit(f"[infra] buildx '{BUILDX_BUILDER_NAME}' already registers {platform_tag} — no change.")
-        return True
+        return _ensure_buildx_ca_trust(emit)
 
     emit(f"[infra] Realignment required — registering {platform_tag} execution layer...")
     subprocess.run(['docker', 'buildx', 'rm', BUILDX_BUILDER_NAME],
@@ -137,6 +137,52 @@ def _ensure_docker_buildx(arch, emit):
             emit(f"[infra] Step failed (rc={rc}) — aborting engine prep.")
             return False
     emit("[infra] Mainframe cross-compilation layer established.")
+    return _ensure_buildx_ca_trust(emit)
+
+
+def _ensure_buildx_ca_trust(emit):
+    """Inject a corporate root CA (STUDIO_CA_CERT) into the buildx builder
+    container, if configured.
+
+    The docker-container driver runs BuildKit inside its own isolated
+    container with its own trust store — separate from the host's docker CLI
+    and from anything mounted into a one-off build container. A TLS-
+    inspecting corporate proxy therefore breaks the FROM-image pull ("load
+    metadata") step even when `docker pull` on the host works fine. Re-run on
+    every ensure_build_engine() pass (including the no-op path) so this
+    survives the builder getting recreated, e.g. after Docker Desktop clears
+    binfmt state.
+    """
+    ca_cert = os.environ.get('STUDIO_CA_CERT', '').strip()
+    if not ca_cert:
+        return True
+    if not os.path.isfile(ca_cert):
+        emit(f"[infra] STUDIO_CA_CERT set but not found: {ca_cert} — skipping CA trust step.")
+        return True
+
+    container = f"buildx_buildkit_{BUILDX_BUILDER_NAME}0"
+    running = subprocess.run(
+        ['docker', 'ps', '-q', '--filter', f'name=^{container}$'],
+        capture_output=True, text=True,
+    )
+    if not running.stdout.strip():
+        emit(f"[infra] Builder container '{container}' not running — skipping CA trust step.")
+        return True
+
+    emit(f"[infra] Trusting corporate CA in the buildx builder ({container})...")
+    steps = [
+        ['docker', 'cp', ca_cert, f'{container}:/usr/local/share/ca-certificates/studio-ca.crt'],
+        ['docker', 'exec', container, 'update-ca-certificates'],
+        ['docker', 'restart', container],
+        ['docker', 'buildx', 'inspect', '--bootstrap'],
+    ]
+    for cmd in steps:
+        rc = _run_streamed(cmd, emit)
+        if rc != 0:
+            emit(f"[infra] CA trust step failed (rc={rc}) — builder may still hit TLS "
+                 "errors pulling from registry.redhat.io.")
+            return True   # builder is still usable; don't block engine prep over this
+    emit("[infra] Corporate CA trusted in buildx builder.")
     return True
 
 
