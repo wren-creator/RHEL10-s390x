@@ -66,6 +66,7 @@ IBM Z host (DASD)   ←──────── dasdfmt / fdasd / dd / zipl  ◄
 ├── studio.sh                             # Start/stop the Studio (macOS/Linux)
 ├── studio.ps1                            # Start/stop the Studio (Windows)
 ├── rpms/                                 # Drop local RPMs here (optional, can be empty)
+├── aux-rpms/                             # Drop non-standard/3rd-party RPMs here — installed into the image via dnf (deps resolve from the harvested cache/CDN)
 ├── rpm-cache/                            # Created by fetch-rpms.sh — local dnf repo, auto-used by builds (git-ignored)
 ├── RHEL10_bootc_s390x.md                 # General reference guide
 ├── Deploy_Guide.md                       # LPAR deployment runbook

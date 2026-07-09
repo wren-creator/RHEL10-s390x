@@ -1735,6 +1735,28 @@ cp -a "{rpm_cache_dir}/." "${{BUILD_CTX}}/rpms/\""""
                                '(entitlement) or a local_repo_url mirror"')
         rpm_install_line = 'RUN rpm -Uvh /tmp/rpms/*.rpm 2>/dev/null || true'
 
+    # ── Auxiliary RPMs (aux-rpms/): non-standard packages dropped by hand ──────
+    # Installed via `dnf install <files>` AFTER the main package layer, so their
+    # dependencies resolve from the repos above (harvested cache first). Kept
+    # apart from rpms/ because that dir carries the cache's repodata — adding
+    # files there after createrepo_c ran would make them invisible to dnf.
+    aux_dir = os.path.join(APP_DIR, 'aux-rpms')
+    try:
+        aux_rpms = sorted(f for f in os.listdir(aux_dir) if f.endswith('.rpm'))
+    except FileNotFoundError:
+        aux_rpms = []
+    if aux_rpms:
+        aux_copy_step = f"""log "Copying {len(aux_rpms)} auxiliary RPM(s) from {aux_dir}..."
+mkdir -p "${{BUILD_CTX}}/rpms/aux"
+cp "{aux_dir}"/*.rpm "${{BUILD_CTX}}/rpms/aux/\""""
+        aux_install_line = ("\n# Auxiliary RPMs from aux-rpms/ — dnf resolves their dependencies\n"
+                            "# from the repos above (harvested cache first)\n"
+                            "RUN dnf -y install /tmp/rpms/aux/*.rpm \\\n"
+                            "  && dnf -y clean all")
+    else:
+        aux_copy_step = '# (no .rpm files in aux-rpms/ at generation time)'
+        aux_install_line = ''
+
     fips_param = " fips=1" if fips == "on" else ""
 
     # ── Arch-specific: packages ────────────────────────────────────────────────
@@ -2092,6 +2114,8 @@ printf '{fstab_content}\\n' > "${{BUILD_CTX}}/fstab"
 
 {rpm_cache_copy_step}
 
+{aux_copy_step}
+
 {local_repo_write_step}
 
 {dasd_write_step}
@@ -2122,6 +2146,7 @@ COPY rpms/ /tmp/rpms/
 RUN dnf -y install \\
 {pkg_install_lines}
   && dnf -y clean all
+{aux_install_line}
 {fips_policy_block}
 
 # Enable services
