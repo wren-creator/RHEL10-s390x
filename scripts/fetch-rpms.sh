@@ -9,20 +9,33 @@
 # repo metadata with createrepo_c, then unregisters the container (trap-
 # guaranteed, even on failure) before it's discarded with --rm.
 #
+# Also logs in to registry.redhat.io on the host (reusing the same username)
+# before pulling the harvester image, and — if your network intercepts TLS
+# through a corporate root CA — trusts that CA inside the throwaway container
+# so subscription-manager/dnf can validate Red Hat's cert.
+#
 # Nothing is registered or installed on your actual host — only inside the
 # disposable container. Your password is prompted by subscription-manager
-# itself, inside the container; this script never sees or stores it.
+# and by the registry login themselves; this script never sees or stores it.
 #
 # Usage:
 #   ./scripts/fetch-rpms.sh                        # default s390x package list
 #   ./scripts/fetch-rpms.sh --packages "vim,curl"   # override the package set
 #   ./scripts/fetch-rpms.sh --dest /path/to/cache   # override the output dir
+#   ./scripts/fetch-rpms.sh --ca-cert /etc/ssl/certs/corp-root-ca.pem
 #
 # Auth:
 #   Interactive (default) — prompts for your Red Hat username; password is
-#   prompted by subscription-manager inside the container.
+#   prompted separately by registry login and by subscription-manager inside
+#   the container.
 #   Non-interactive — set RH_ORG and RH_ACTIVATION_KEY (an activation key on
-#   your account/org) and no prompts occur at all.
+#   your account/org) for subscription registration; registry.redhat.io login
+#   is skipped in this mode (no interactive credential to use).
+#
+# Corporate TLS-inspecting proxy: pass --ca-cert /path/to/your-root-ca.pem
+# (or set CA_CERT_FILE) if subscription-manager/dnf inside the container
+# cannot validate Red Hat's TLS cert. It is mounted read-only and trusted
+# via update-ca-trust inside the disposable container only.
 #
 # Output: a local dnf repo (RPMs + repodata/) under rpm-cache/s390x/ (or
 # --dest). Point a Containerfile's local.repo baseurl at file://<that dir>
@@ -33,6 +46,7 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 PKG_LIST_FILE="$HERE/scripts/package-list.s390x.txt"
 CACHE_DIR="${RPM_CACHE_DIR:-$HERE/rpm-cache/s390x}"
 UBI_IMAGE="${UBI_IMAGE:-registry.access.redhat.com/ubi10/ubi:latest}"
+CA_CERT_FILE="${CA_CERT_FILE:-}"
 
 RED='\033[0;31m'; YEL='\033[1;33m'; GRN='\033[0;32m'; CYN='\033[0;36m'; NC='\033[0m'
 log()  { echo -e "${GRN}[+]${NC} $*"; }
@@ -45,10 +59,15 @@ while [ $# -gt 0 ]; do
   case "$1" in
     --packages) PACKAGES="$2"; shift 2 ;;
     --dest)     CACHE_DIR="$2"; shift 2 ;;
-    -h|--help)  sed -n '2,30p' "$0"; exit 0 ;;
+    --ca-cert)  CA_CERT_FILE="$2"; shift 2 ;;
+    -h|--help)  sed -n '2,42p' "$0"; exit 0 ;;
     *) err "Unknown argument: $1 (see --help)" ;;
   esac
 done
+
+if [ -n "$CA_CERT_FILE" ]; then
+  [ -f "$CA_CERT_FILE" ] || err "--ca-cert file not found: $CA_CERT_FILE"
+fi
 
 step "Pre-flight"
 
@@ -85,6 +104,19 @@ else
   log "Auth: username/password (password prompted inside the container, not seen by this script)"
 fi
 
+step "Registry login (registry.redhat.io)"
+if [ -n "$RH_USERNAME" ]; then
+  log "Logging in as $RH_USERNAME (separate password prompt from subscription-manager's)..."
+  "$ENGINE" login registry.redhat.io --username "$RH_USERNAME" \
+    || warn "registry.redhat.io login failed — continuing; only needed if UBI_IMAGE pulls from registry.redhat.io"
+else
+  warn "No username available in non-interactive (activation-key) mode — skipping registry.redhat.io login"
+fi
+
+if [ -n "$CA_CERT_FILE" ]; then
+  log "Corporate CA cert will be trusted inside the harvester container: $CA_CERT_FILE"
+fi
+
 # ── Inner script: runs INSIDE the throwaway container ──────────────────────
 INNER="$(mktemp)"
 trap 'rm -f "$INNER"' EXIT
@@ -98,6 +130,12 @@ err()  { echo -e "${RED}[✗]${NC} $*" >&2; exit 1; }
 
 unregister() { subscription-manager unregister >/dev/null 2>&1 || true; }
 trap unregister EXIT
+
+if [ -f /tmp/corp-ca.pem ]; then
+  log "Trusting corporate CA cert (/tmp/corp-ca.pem)..."
+  cp /tmp/corp-ca.pem /etc/pki/ca-trust/source/anchors/corp-ca.pem
+  update-ca-trust extract
+fi
 
 log "Registering with Red Hat..."
 if [ "$AUTH_MODE" = "key" ]; then
@@ -134,18 +172,22 @@ createrepo_c /out >/dev/null
 log "Harvested $(ls -1 /out/*.rpm 2>/dev/null | wc -l | tr -d ' ') RPM(s) into /out"
 INNER_EOF
 
-TTY_FLAGS="-i"
-[ -t 0 ] && TTY_FLAGS="-it"
+TTY_ARGS=(-i)
+[ -t 0 ] && TTY_ARGS=(-i -t)
+
+RUN_ARGS=(--rm "${TTY_ARGS[@]}"
+  -e AUTH_MODE="$AUTH_MODE"
+  -e RH_USERNAME="$RH_USERNAME"
+  -e RH_ORG="${RH_ORG:-}"
+  -e RH_ACTIVATION_KEY="${RH_ACTIVATION_KEY:-}"
+  -e PKG_ARR_STR="${PKG_ARR[*]}"
+  -v "$INNER:/harvest.sh:ro"
+  -v "$CACHE_DIR:/out"
+)
+[ -n "$CA_CERT_FILE" ] && RUN_ARGS+=(-v "$CA_CERT_FILE:/tmp/corp-ca.pem:ro")
 
 step "Registering + harvesting inside a throwaway $UBI_IMAGE container"
-"$ENGINE" run --rm $TTY_FLAGS \
-  -e AUTH_MODE="$AUTH_MODE" \
-  -e RH_USERNAME="$RH_USERNAME" \
-  -e RH_ORG="${RH_ORG:-}" \
-  -e RH_ACTIVATION_KEY="${RH_ACTIVATION_KEY:-}" \
-  -e PKG_ARR_STR="${PKG_ARR[*]}" \
-  -v "$INNER:/harvest.sh:ro" \
-  -v "$CACHE_DIR:/out" \
+"$ENGINE" run "${RUN_ARGS[@]}" \
   "$UBI_IMAGE" \
   bash -c 'IFS=" " read -r -a PKG_ARR <<< "$PKG_ARR_STR"; source /harvest.sh'
 

@@ -89,6 +89,15 @@ auto-detects the cache on the next build and wires it in as a `priority=1` repo 
 install fully offline, so this works even under **docker buildx** (no entitlement cert
 mounts required). Re-run the harvest only when you change the package list.
 
+It also logs `$ENGINE` in to `registry.redhat.io` on the host (reusing the username you
+enter) before pulling the harvester image. If your network intercepts TLS through a
+corporate root CA — subscription-manager/dnf inside the container will fail to validate
+Red Hat's cert otherwise — pass it in:
+```bash
+./scripts/fetch-rpms.sh --ca-cert /path/to/your-corp-root-ca.pem
+```
+It's mounted read-only and trusted only inside the disposable container, never on the host.
+
 ---
 
 ## 3. Two ways to run the Studio on Windows
