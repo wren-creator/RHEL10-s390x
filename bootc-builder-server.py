@@ -2007,17 +2007,25 @@ docker buildx build \\
     -f "${{BUILD_CTX}}/Containerfile" \\
     "$BUILD_CTX\""""
 
-    # bootc-image-builder: podman reads the freshly built image from local storage.
-    containers_mount = ("    -v /var/lib/containers:/var/lib/containers \\\n"
-                        if engine == 'podman' else "")
-    bib_note = ('warn "bootc-image-builder is best supported under podman; under docker the '
-                'target image must be in containers-storage or pushed to a registry first"'
-                if engine == 'docker' else 'true')
-    imagebuilder_step = f"""{bib_note}
-"$ENGINE" run --rm \\
+    # bootc-image-builder can ONLY read images from containers-storage (podman's
+    # store), so it always runs under podman. When the build engine is docker,
+    # the image lives in docker's store and must be handed across first.
+    if engine == 'docker':
+        bib_transfer = """log "Transferring built image into containers-storage (bootc-image-builder cannot read docker's store)..."
+command -v podman >/dev/null 2>&1 \\
+  || err "podman is required to run bootc-image-builder — install it, or push $FULL_IMAGE to a registry and build from there"
+docker save "$FULL_IMAGE" | podman load
+# Reuse the docker login for podman's pull of the builder image
+export REGISTRY_AUTH_FILE="${HOME}/.docker/config.json"
+"""
+    else:
+        bib_transfer = ''
+    imagebuilder_step = f"""{bib_transfer}podman run --rm \\
     --privileged \\
     --security-opt seccomp=unconfined \\
-{containers_mount}    -v "${{OUTPUT_DIR}}:/output" \\
+    --security-opt label=type:unconfined_t \\
+    -v /var/lib/containers/storage:/var/lib/containers/storage \\
+    -v "${{OUTPUT_DIR}}:/output" \\
     "$BUILDER_IMAGE" \\
     --type {output_format} \\
     --target-arch {arch} \\
@@ -2053,7 +2061,9 @@ BUILD_CTX="/var/tmp/bootc-build-ctx"
 OUTPUT_DIR="{output_dir}"
 IMAGE_NAME="{image_name}"
 IMAGE_TAG="{image_tag}"
-FULL_IMAGE="${{IMAGE_NAME}}:${{IMAGE_TAG}}"
+# Fully qualified so the name survives docker save → podman load unchanged
+# (unqualified tags get normalized to docker.io/library/... on load).
+FULL_IMAGE="localhost/${{IMAGE_NAME}}:${{IMAGE_TAG}}"
 BUILDER_IMAGE="{builder_img}"
 ADMIN_USER="{admin_user}"
 ENGINE="{engine}"
