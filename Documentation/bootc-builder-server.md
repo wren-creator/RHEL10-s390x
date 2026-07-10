@@ -123,8 +123,8 @@ The admin password is set to `Ch@ngeMe1st!` and expires on first login. You will
 |---|---|
 | Boot DASD address | CCW bus address of the DASD to boot from (e.g. `0.0.0200`). Written to `/etc/dasd.conf`, `zipl.conf`, and the Phase B deploy snippet. |
 | DD target DASD device | Block device path for the DASD (e.g. `/dev/dasda`). Used in the **Phase B** snippet — where you'll `dd` the RAW on the Z host. Nothing is written to a DASD on the build host. |
-| Storage layout | **LVM** creates two logical volumes: `root` (40 GB) and `var` (20 GB) on first boot. **Single XFS** uses one partition with `LABEL=rootfs`. |
-| LVM volume group name | Name of the VG created during first boot (default: `rhelvg`). Used in `fstab` and zipl kernel parameters. |
+| Data DASD address (optional) | A **second** DASD to auto-provision as an LVM data volume mounted at `/data` on first boot. Leave empty to skip. The **boot** disk layout always comes from bootc-image-builder and is never reformatted — the first-boot script also refuses at runtime to touch the disk backing `/`. |
+| Data volume group name | Name of the VG created on the data DASD (default: `datavg`). Only used when a data DASD is set. |
 
 > **Warning:** These addresses configure the image and the **Phase B** snippet only — the build host writes nothing to a DASD. On the Z host in Phase B, `dasdfmt` fully erases the target DASD.
 
@@ -227,7 +227,7 @@ emulation layer (idempotent — re-running when already set up makes no changes)
 |---|---|
 | 0 | Pre-flight: checks the detected engine (`$ENGINE`), root, and build mode (native/cross) |
 | 1 | `$ENGINE login registry.redhat.io` |
-| 2 | Writes all build context files (dracut config, network config, fstab, authorized_keys, and optionally dasd.conf, zipl.conf, firstboot-lvm.sh) |
+| 2 | Writes all build context files (dracut config, network config, authorized_keys, and optionally dasd.conf, zipl.conf, firstboot-lvm.sh for the data volume) |
 | 3 | Writes the Containerfile into the build context |
 | 4 | Builds the image — `docker buildx build --platform linux/<arch> --load` or `podman build --platform linux/<arch>` (entitlement certs mounted only in native/RHEL mode) |
 | 5 | `$ENGINE run bootc-image-builder --type <format> --target-arch <arch>` |

@@ -191,18 +191,21 @@ virsh start <vm-name>
 
 ---
 
-## 7. First-boot: LVM provisioning
+## 7. First-boot: data-volume provisioning (optional)
 
-The `firstboot-lvm.service` systemd unit runs automatically on the first boot. It performs the following actions in order:
+The `firstboot-lvm.service` unit exists **only if you set a Data DASD address in the
+Studio form** — it provisions a *second* DASD as an LVM data volume mounted at `/data`.
+The **boot** disk is never touched: its layout comes from bootc-image-builder inside the
+RAW, and the script refuses at runtime to format the disk backing `/` or any mounted device.
 
 | Step | Action |
 |------|--------|
-| 1 | `cio_ignore -r 0.0.0200` — remove DASD from ignore list |
-| 2 | `chccwdev -e 0.0.0200` — bring DASD online |
-| 3 | `dasdfmt` — low-level format (CDL, 4096-byte blocks) |
+| 1 | `cio_ignore -r` + `chccwdev -e` — bring the **data** DASD online; resolve its device node from the CCW address |
+| 2 | Safety checks — abort if the device backs `/` or has mounted filesystems |
+| 3 | `dasdfmt` — low-level format (CDL, 4096-byte blocks) — data DASD only |
 | 4 | `fdasd -a` — create single partition |
-| 5 | `pvcreate` → `vgcreate rhelvg` → `lvcreate root (40G) + var (20G)` |
-| 6 | `mkfs.xfs` on both logical volumes |
+| 5 | `pvcreate` → `vgcreate <vg>` → `lvcreate data (100%FREE)` → `mkfs.xfs` |
+| 6 | Append `/data` entry (with `nofail`) to `/etc/fstab` and mount |
 | 7 | Self-disable; write `/var/lib/firstboot-lvm.done` |
 
 ### Monitor first-boot progress via the console
@@ -331,7 +334,7 @@ Work through this checklist before putting the system into production.
 - [ ] Password changed from the temporary value on first login
 - [ ] Key-based SSH login confirmed working: `ssh -i ~/.ssh/britley_ibmz britley@<ip>`
 - [ ] Password authentication disabled in `/etc/ssh/sshd_config`
-- [ ] First-boot LVM log shows success: `cat /var/log/firstboot-lvm.log`
+- [ ] If a data DASD was configured — first-boot log shows success: `cat /var/log/firstboot-lvm.log`
 - [ ] Disk layout confirmed: `df -h` and `lvs`
 - [ ] Network confirmed: `nmcli device show enc600`
 - [ ] `bootc status` confirms image is registered and pinned
