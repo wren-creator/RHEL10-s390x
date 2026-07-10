@@ -57,5 +57,6 @@ RUN systemctl enable firstboot-lvm.service
 # Rebuild initramfs to include DASD drivers + config
 RUN dracut -f
 
-# Relabel SELinux after changes
-RUN fixfiles -F relabel
+# No build-time SELinux relabel: SELinux is not enabled inside a container
+# build namespace (fixfiles exits 1), and bootc/ostree systems apply labels
+# at deploy time from the policy shipped in the image.

@@ -139,8 +139,9 @@ RUN chmod +x /usr/local/sbin/firstboot-lvm.sh \
 # Rebuild initramfs to include DASD drivers
 RUN dracut -f
 
-# Relabel SELinux after changes
-RUN fixfiles -F relabel
+# No build-time SELinux relabel: SELinux is not enabled inside a container
+# build namespace (fixfiles exits 1), and bootc/ostree systems apply labels
+# at deploy time from the policy shipped in the image.
 
 # Required metadata for bootc-image-builder
 RUN bootc install-to-filesystem --rootfs /
