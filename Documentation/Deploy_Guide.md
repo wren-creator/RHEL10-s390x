@@ -191,22 +191,24 @@ virsh start <vm-name>
 
 ---
 
-## 7. First-boot: data-volume provisioning (optional)
+## 7. First-boot: data volume group provisioning (optional)
 
-The `firstboot-lvm.service` unit exists **only if you set a Data DASD address in the
-Studio form** — it provisions a *second* DASD as an LVM data volume mounted at `/data`.
-The **boot** disk is never touched: its layout comes from bootc-image-builder inside the
-RAW, and the script refuses at runtime to format the disk backing `/` or any mounted device.
+The `firstboot-lvm.service` unit exists **only if you configured volume groups in the
+Studio form** — up to two VGs (site norm: `vgos` + `vgapp`), each spanning a **range of
+DASDs** (e.g. `0.0.0201-0.0.0204`). The **boot** disk is never touched: its layout comes
+from bootc-image-builder inside the RAW (the OS itself always lives there — image mode),
+and the script refuses at runtime to format the disk backing `/` or any mounted device.
+
+For each configured VG, in order:
 
 | Step | Action |
 |------|--------|
-| 1 | `cio_ignore -r` + `chccwdev -e` — bring the **data** DASD online; resolve its device node from the CCW address |
-| 2 | Safety checks — abort if the device backs `/` or has mounted filesystems |
-| 3 | `dasdfmt` — low-level format (CDL, 4096-byte blocks) — data DASD only |
-| 4 | `fdasd -a` — create single partition |
-| 5 | `pvcreate` → `vgcreate <vg>` → `lvcreate data (100%FREE)` → `mkfs.xfs` |
-| 6 | Append `/data` entry (with `nofail`) to `/etc/fstab` and mount |
-| 7 | Self-disable; write `/var/lib/firstboot-lvm.done` |
+| 1 | `cio_ignore -r` + `chccwdev -e` for **every DASD in the range**; device nodes resolved from CCW addresses |
+| 2 | Safety checks per device — abort if it backs `/` or has mounted filesystems |
+| 3 | `dasdfmt` (CDL, 4096-byte blocks) + `fdasd -a` on each DASD |
+| 4 | `pvcreate` all partitions → `vgcreate <vg>` across them → `lvcreate data (100%FREE)` → `mkfs.xfs` |
+| 5 | Append the mountpoint entry (with `nofail`) to `/etc/fstab` and mount (mountpoint dir is baked into the image — `/` is read-only) |
+| 6 | After all VGs: self-disable; write `/var/lib/firstboot-lvm.done` |
 
 ### Monitor first-boot progress via the console
 

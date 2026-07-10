@@ -123,8 +123,8 @@ The admin password is set to `Ch@ngeMe1st!` and expires on first login. You will
 |---|---|
 | Boot DASD address | CCW bus address of the DASD to boot from (e.g. `0.0.0200`). Written to `/etc/dasd.conf`, `zipl.conf`, and the Phase B deploy snippet. |
 | DD target DASD device | Block device path for the DASD (e.g. `/dev/dasda`). Used in the **Phase B** snippet — where you'll `dd` the RAW on the Z host. Nothing is written to a DASD on the build host. |
-| Data DASD address (optional) | A **second** DASD to auto-provision as an LVM data volume mounted at `/data` on first boot. Leave empty to skip. The **boot** disk layout always comes from bootc-image-builder and is never reformatted — the first-boot script also refuses at runtime to touch the disk backing `/`. |
-| Data volume group name | Name of the VG created on the data DASD (default: `datavg`). Only used when a data DASD is set. |
+| Volume group 1 / 2 (optional) | Up to two first-boot LVM volume groups (site norm: `vgos` + `vgapp`). Each takes a **name**, a **DASD range/list** (`0.0.0201-0.0.0204`, comma lists, or a mix — device numbers are hex and 3-digit forms like `0.0.201` are normalized), and a **mountpoint** (default `/<name>`). Leave the range blank to skip. The VG spans all DASDs in the range as one `data` LV (100%FREE). |
+| — Boot disk note | The **boot** disk layout always comes from bootc-image-builder and is never reformatted; the OS lives in the image, not in these VGs. The first-boot script also refuses at runtime to touch the disk backing `/` or anything mounted. |
 
 > **Warning:** These addresses configure the image and the **Phase B** snippet only — the build host writes nothing to a DASD. On the Z host in Phase B, `dasdfmt` fully erases the target DASD.
 

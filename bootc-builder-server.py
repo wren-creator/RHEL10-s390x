@@ -1148,20 +1148,38 @@ PAGE = r"""<!DOCTYPE html>
                id="dd_dasd" placeholder="/dev/dasda">
         <span class="hint">Where you'll <code>dd</code> the RAW in Phase B on the Z host (e.g. /dev/dasda)</span>
       </div>
-      <div class="field">
-        <label>Data DASD address (optional)</label>
-        <input type="text" name="data_dasd" value="" id="data_dasd" placeholder="0.0.0300">
-        <span class="hint">A <strong>second</strong> DASD to auto-provision as an LVM data volume
-        (mounted at <code>/data</code>) on first boot. Leave empty to skip — the <strong>boot</strong>
-        disk layout always comes from bootc-image-builder and is never reformatted.</span>
+      <div class="triple">
+        <div class="field">
+          <label>Volume group 1 — name (optional)</label>
+          <input type="text" name="vg1_name" value="" placeholder="vgos">
+          <span class="hint">First-boot LVM volume group. Leave the DASD range blank to skip</span>
+        </div>
+        <div class="field">
+          <label>DASD range / list</label>
+          <input type="text" name="vg1_dasds" value="" placeholder="0.0.0201-0.0.0204">
+          <span class="hint">Range (<code>0.0.0201-0.0.0204</code>), comma list, or both</span>
+        </div>
+        <div class="field">
+          <label>Mountpoint</label>
+          <input type="text" name="vg1_mount" value="" placeholder="/vgos (default: /&lt;name&gt;)">
+        </div>
       </div>
-      <div class="field" id="vg-name-field">
-        <label>Data volume group name</label>
-        <input type="text" name="vg_name" value="datavg" id="vg_name" placeholder="datavg">
-        <span class="hint">Only used when a data DASD is set</span>
+      <div class="triple">
+        <div class="field">
+          <label>Volume group 2 — name (optional)</label>
+          <input type="text" name="vg2_name" value="" placeholder="vgapp">
+        </div>
+        <div class="field">
+          <label>DASD range / list</label>
+          <input type="text" name="vg2_dasds" value="" placeholder="0.0.0401-0.0.0405">
+        </div>
+        <div class="field">
+          <label>Mountpoint</label>
+          <input type="text" name="vg2_mount" value="" placeholder="/apps (default: /&lt;name&gt;)">
+        </div>
       </div>
       <div class="warn">
-        These addresses configure the image and the Phase B deploy snippet — nothing is written to a DASD on this build host. On the Z host, <code>dasdfmt</code> is destructive: it fully erases the target DASD. First-boot provisioning refuses to touch the disk it booted from.
+        These addresses configure the image and the Phase B deploy snippet — nothing is written to a DASD on this build host. On the Z host, <code>dasdfmt</code> is destructive: it fully erases the target DASD. First-boot provisioning formats only the listed <strong>data</strong> DASDs — it refuses the disk it booted from, and the OS itself always lives in the image on the boot DASD (image mode), not in these VGs.
       </div>
     </div>
   </div>
@@ -1830,6 +1848,37 @@ refreshEngineBadge();
 
 # ── Script generator ──────────────────────────────────────────────────────────
 
+def _expand_dasd_spec(spec):
+    """Expand a DASD spec into a normalized address list.
+
+    Accepts ranges ('0.0.0201-0.0.0204'), comma/space-separated lists, or a
+    mix. Device numbers are hex and get normalized to 4 digits (0.0.201 →
+    0.0.0201). Unparseable tokens pass through untouched so the failure shows
+    up visibly at chccwdev time instead of silently disappearing here.
+    """
+    out = []
+    for token in spec.replace(',', ' ').split():
+        if '-' in token:
+            lo, hi = token.split('-', 1)
+            try:
+                a, b, lo_dev = lo.split('.')
+                lo_n = int(lo_dev, 16)
+                hi_n = int(hi.split('.')[-1], 16)
+                if lo_n <= hi_n <= lo_n + 255:
+                    out += [f'{a}.{b}.{n:04x}' for n in range(lo_n, hi_n + 1)]
+                    continue
+            except ValueError:
+                pass
+            out.append(token)
+            continue
+        try:
+            a, b, dev = token.split('.')
+            out.append(f'{a}.{b}.{int(dev, 16):04x}')
+        except ValueError:
+            out.append(token)
+    return out
+
+
 def generate_script(p, phaseb_only=False):
     # ── Parameters ────────────────────────────────────────────────────────────
     admin_user    = p.get('admin_user',    ['bootcadmin'])[0].strip()
@@ -1842,8 +1891,16 @@ def generate_script(p, phaseb_only=False):
     qeth_channel  = p.get('qeth_channel',  ['0.0.0600'])[0].strip()
     iface         = p.get('iface',         ['enc600'])[0].strip()
     ip_method     = p.get('ip_method',     ['dhcp'])[0].strip()
-    data_dasd     = p.get('data_dasd',     [''])[0].strip()
-    vg_name       = p.get('vg_name',       ['datavg'])[0].strip()
+    # First-boot data volume groups (up to 2), each over a DASD range/list.
+    data_vgs = []
+    for n in ('1', '2'):
+        vspec = p.get(f'vg{n}_dasds', [''])[0].strip()
+        if not vspec:
+            continue
+        vname  = p.get(f'vg{n}_name',  [''])[0].strip() or f'vg{n}'
+        vmount = p.get(f'vg{n}_mount', [''])[0].strip() or f'/{vname}'
+        data_vgs.append({'name': vname, 'mount': vmount,
+                         'dasds': _expand_dasd_spec(vspec)})
     # non-s390x
     target_disk   = p.get('target_disk',   ['/dev/sda'])[0].strip()
     nic           = p.get('nic',           ['eth0'])[0].strip()
@@ -1977,7 +2034,7 @@ cp "{aux_dir}"/*.rpm "${{BUILD_CTX}}/rpms/aux/\""""
         pkgs += ["      grub2", "      grub2-pc", "      grub2-efi-x64", "      grub2-efi-x64-modules"]
     else:  # aarch64
         pkgs += ["      grub2-efi-aa64", "      grub2-efi-aa64-modules"]
-    if is_s390x and data_dasd:
+    if is_s390x and data_vgs:
         pkgs.append("      lvm2")
     if fips == "on":
         pkgs.append("      crypto-policies-scripts")
@@ -1988,7 +2045,7 @@ cp "{aux_dir}"/*.rpm "${{BUILD_CTX}}/rpms/aux/\""""
 
     # ── Arch-specific: dracut config ───────────────────────────────────────────
     dracut_s390x_line = 'add_drivers+=" dasd_mod dasd_eckd_mod qdio qeth qeth_l2 zfcp "' if is_s390x else ''
-    dracut_lvm_line   = 'add_dracutmodules+=" lvm "'  if (is_s390x and data_dasd) else ''
+    dracut_lvm_line   = 'add_dracutmodules+=" lvm "'  if (is_s390x and data_vgs) else ''
     dracut_fips_line  = 'add_dracutmodules+=" fips "' if fips == "on" else ''
 
     # ── Arch-specific: network (up to 3 interfaces) ───────────────────────────
@@ -2101,15 +2158,21 @@ EOF"""
         dasd_cf_copy    = ''
         zipl_cf_copy    = ''
 
-    # ── Storage: optional first-boot DATA volume (s390x only) ─────────────────
-    # Provisions a SECOND DASD as an LVM data volume mounted at /data. The boot
-    # disk is never touched: the script resolves the device from the CCW
-    # address at runtime and hard-refuses the disk backing / (defense in depth
-    # against a data_dasd that equals the boot DASD).
-    if is_s390x and data_dasd:
+    # ── Storage: optional first-boot DATA volume groups (s390x only) ──────────
+    # Provisions up to two LVM volume groups, each across a range of DASDs
+    # (site norm: vgos + vgapp). The boot disk is never touched: devices are
+    # resolved from CCW addresses at runtime and the disk backing / is
+    # hard-refused. The OS itself lives in the image on the boot DASD (image
+    # mode) — these VGs hold data/application mounts only.
+    if is_s390x and data_vgs:
+        vg_desc = ', '.join(
+            f"{v['name']}→{v['mount']} ({len(v['dasds'])} DASD)" for v in data_vgs)
+        provision_calls = '\n'.join(
+            f'provision_vg "{v["name"]}" "{v["mount"]}" {" ".join(v["dasds"])}'
+            for v in data_vgs)
         firstboot_section = f"""
 # ─────────────────────────────────────────────────────────────────────────────
-# STEP 2b · Write firstboot-lvm.sh (data volume on {data_dasd})
+# STEP 2b · Write firstboot-lvm.sh ({vg_desc})
 # ─────────────────────────────────────────────────────────────────────────────
 log "Writing firstboot-lvm.sh..."
 cat > "${{BUILD_CTX}}/scripts/firstboot-lvm.sh" << 'FBEOF'
@@ -2117,55 +2180,54 @@ cat > "${{BUILD_CTX}}/scripts/firstboot-lvm.sh" << 'FBEOF'
 set -euo pipefail
 LOG=/var/log/firstboot-lvm.log
 exec >> "$LOG" 2>&1
-echo "=== firstboot-lvm (data volume) started: $(date) ==="
+echo "=== firstboot-lvm (data volume groups) started: $(date) ==="
 
-DATA_ADDR="{data_dasd}"
-VG_NAME="{vg_name}"
-MOUNTPOINT="/data"
-
-echo "[1/7] Bringing data DASD $DATA_ADDR online..."
-cio_ignore -r "$DATA_ADDR" || true
-chccwdev -e "$DATA_ADDR"
-for i in $(seq 1 20); do
-  ls "/sys/bus/ccw/devices/$DATA_ADDR/block/" >/dev/null 2>&1 && break; sleep 1
-done
-DASD_DEV="/dev/$(ls "/sys/bus/ccw/devices/$DATA_ADDR/block/" | head -1)"
-[ -b "$DASD_DEV" ] || {{ echo "ERROR: no block device appeared for $DATA_ADDR"; exit 1; }}
-echo "Resolved $DATA_ADDR → $DASD_DEV"
-
-echo "[2/7] Safety checks..."
 ROOT_SRC="$(findmnt -no SOURCE /)"
 ROOT_DISK="/dev/$(lsblk -no PKNAME "$ROOT_SRC" 2>/dev/null | head -1)"
-if [ "$DASD_DEV" = "$ROOT_DISK" ]; then
-  echo "REFUSING: $DASD_DEV is the disk the system booted from ($ROOT_DISK backs /)"
-  exit 1
-fi
-if lsblk -no MOUNTPOINTS "$DASD_DEV" 2>/dev/null | grep -q '\\S'; then
-  echo "REFUSING: $DASD_DEV has mounted filesystems"
-  exit 1
-fi
 
-echo "[3/7] Low-level formatting $DASD_DEV..."
-dasdfmt -b 4096 -d cdl -y "$DASD_DEV"
+provision_vg() {{
+  local VG_NAME="$1" MOUNTPOINT="$2"; shift 2
+  local PARTS=()
+  echo "─── VG $VG_NAME → $MOUNTPOINT ($# DASD) ───"
+  for ADDR in "$@"; do
+    echo "[+] Bringing $ADDR online..."
+    cio_ignore -r "$ADDR" || true
+    chccwdev -e "$ADDR"
+    for i in $(seq 1 20); do
+      ls "/sys/bus/ccw/devices/$ADDR/block/" >/dev/null 2>&1 && break; sleep 1
+    done
+    local DEV="/dev/$(ls "/sys/bus/ccw/devices/$ADDR/block/" | head -1)"
+    [ -b "$DEV" ] || {{ echo "ERROR: no block device appeared for $ADDR"; exit 1; }}
+    if [ "$DEV" = "$ROOT_DISK" ]; then
+      echo "REFUSING: $DEV ($ADDR) is the disk the system booted from"
+      exit 1
+    fi
+    if lsblk -no MOUNTPOINTS "$DEV" 2>/dev/null | grep -q '\\S'; then
+      echo "REFUSING: $DEV ($ADDR) has mounted filesystems"
+      exit 1
+    fi
+    echo "[+] dasdfmt + partition $DEV ($ADDR)..."
+    dasdfmt -b 4096 -d cdl -y "$DEV"
+    fdasd -a "$DEV"
+    local PART="${{DEV}}1"
+    for i in $(seq 1 10); do [ -b "$PART" ] && break; sleep 1; done
+    PARTS+=("$PART")
+  done
+  echo "[+] pvcreate + vgcreate $VG_NAME across ${{#PARTS[@]}} PV(s)..."
+  pvcreate "${{PARTS[@]}}"
+  vgcreate "$VG_NAME" "${{PARTS[@]}}"
+  lvcreate -l 100%FREE -n data "$VG_NAME"
+  mkfs.xfs -f "/dev/$VG_NAME/data"
+  echo "[+] Mounting /dev/$VG_NAME/data at $MOUNTPOINT..."
+  mkdir -p "$MOUNTPOINT" 2>/dev/null || true   # baked into the image; / is read-only
+  echo "/dev/$VG_NAME/data  $MOUNTPOINT  xfs  defaults,nofail  0 0" >> /etc/fstab
+  mount "$MOUNTPOINT"
+  echo "─── VG $VG_NAME complete ───"
+}}
 
-echo "[4/7] Partitioning..."
-fdasd -a "$DASD_DEV"
-PART="${{DASD_DEV}}1"
-for i in $(seq 1 10); do [ -b "$PART" ] && break; sleep 1; done
+{provision_calls}
 
-echo "[5/7] Creating LVM PV, VG, data LV..."
-pvcreate "$PART"
-vgcreate "$VG_NAME" "$PART"
-lvcreate -l 100%FREE -n data "$VG_NAME"
-mkfs.xfs -f "/dev/$VG_NAME/data"
-
-echo "[6/7] Mounting at $MOUNTPOINT..."
-mkdir -p "$MOUNTPOINT"
-echo "/dev/$VG_NAME/data  $MOUNTPOINT  xfs  defaults,nofail  0 0" >> /etc/fstab
 systemctl daemon-reload
-mount "$MOUNTPOINT"
-
-echo "[7/7] Disabling service..."
 systemctl disable firstboot-lvm.service
 touch /var/lib/firstboot-lvm.done
 echo "=== firstboot-lvm complete: $(date) ==="
@@ -2174,7 +2236,7 @@ chmod +x "${{BUILD_CTX}}/scripts/firstboot-lvm.sh"
 
 cat > "${{BUILD_CTX}}/systemd/firstboot-lvm.service" << 'SVCEOF'
 [Unit]
-Description=First-boot data DASD + LVM provisioning
+Description=First-boot data volume group provisioning
 ConditionPathExists=!/var/lib/firstboot-lvm.done
 
 [Service]
@@ -2189,14 +2251,18 @@ StandardError=journal+console
 WantedBy=multi-user.target
 SVCEOF
 """
-        firstboot_containerfile = """# First-boot data-volume automation
+        # Mountpoint directories must exist in the ostree commit — / is
+        # read-only at runtime, so first boot cannot mkdir top-level dirs.
+        mount_dirs = ' '.join(v['mount'] for v in data_vgs)
+        firstboot_containerfile = f"""# First-boot data-volume automation
 COPY scripts/firstboot-lvm.sh /usr/local/sbin/firstboot-lvm.sh
 COPY systemd/firstboot-lvm.service /etc/systemd/system/firstboot-lvm.service
 RUN chmod 0755 /usr/local/sbin/firstboot-lvm.sh \\
+    && mkdir -p {mount_dirs} \\
     && systemctl enable firstboot-lvm.service"""
     else:
         firstboot_section = ""
-        firstboot_containerfile = "# No data DASD configured — no firstboot provisioning"
+        firstboot_containerfile = "# No data volume groups configured — no firstboot provisioning"
 
     # ── Phase A ends at a downloadable image ───────────────────────────────────
     # This host builds and produces the image file only — it never writes to a
@@ -2324,8 +2390,10 @@ export REGISTRY_AUTH_FILE="${HOME}/.docker/config.json"
     --target-arch {arch} \\
     "$FULL_IMAGE\""""
 
-    storage_label = (f"boot disk per bootc-image-builder + data LVM on {data_dasd} (VG: {vg_name})"
-                     if (is_s390x and data_dasd) else "boot disk per bootc-image-builder")
+    storage_label = ("boot disk per bootc-image-builder + " + ', '.join(
+                         f"{v['name']} on {len(v['dasds'])} DASD → {v['mount']}"
+                         for v in data_vgs)
+                     if (is_s390x and data_vgs) else "boot disk per bootc-image-builder")
 
     # ── Assemble script ─────────────────────────────────────────────────────────
     script = f"""#!/bin/bash
