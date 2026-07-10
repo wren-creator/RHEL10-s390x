@@ -1354,9 +1354,11 @@ PAGE = r"""<!DOCTYPE html>
       <strong style="color:var(--text);">Phase B — deploy on the Z host:</strong>
       copy this image to a Linux-on-Z host with the DASD attached, then
       <code>dasdfmt</code> → <code>fdasd</code> → <code>dd</code> → <code>zipl</code>.
-      The exact commands (with your DASD addresses) are in the generated script's
-      <code>PHASE B</code> block — click <em>Generate Script</em> to see them.
+      <button type="button" class="copy-btn" onclick="showPhaseB()" style="margin-left:8px;">
+        &#x1F4CB; Show Phase B commands</button>
     </div>
+    <pre class="output-script" id="phaseb-out"
+         style="display:none; white-space:pre-wrap; width:100%; margin-top:10px;"></pre>
   </div>
 </div>
 
@@ -1471,6 +1473,23 @@ async function runPreflight() {
   }
   btn.textContent = '[ run checks ]';
   btn.disabled = false;
+}
+
+async function showPhaseB() {
+  var el = document.getElementById('phaseb-out');
+  if (el.style.display === 'block') { el.style.display = 'none'; return; }
+  var params = new URLSearchParams(new FormData(document.getElementById('form'))).toString();
+  try {
+    var res = await fetch('/phaseb', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/x-www-form-urlencoded'},
+      body: params,
+    });
+    el.textContent = await res.text();
+  } catch (e) {
+    el.textContent = '# Could not fetch Phase B steps: ' + e;
+  }
+  el.style.display = 'block';
 }
 
 async function buildNow() {
@@ -1627,7 +1646,7 @@ refreshEngineBadge();
 
 # ── Script generator ──────────────────────────────────────────────────────────
 
-def generate_script(p):
+def generate_script(p, phaseb_only=False):
     # ── Parameters ────────────────────────────────────────────────────────────
     admin_user    = p.get('admin_user',    ['bootcadmin'])[0].strip()
     ssh_pubkey    = p.get('ssh_pubkey',    [''])[0].strip()
@@ -1960,6 +1979,12 @@ echo ""
     else:
         phase_b_snippet = ""
 
+    # The deliverable panel fetches just this block via POST /phaseb so the
+    # deploy commands show inline without reloading away the build output.
+    if phaseb_only:
+        return (phase_b_snippet.strip()
+                or '# No Phase B steps for this output format.')
+
     # ── Preflight (build host produces a file — no target device needed) ───────
     preflight_disk_check = ('log "Build host produces an image file — '
                             'no target block device required here (see Phase B)"')
@@ -2262,6 +2287,14 @@ class Handler(BaseHTTPRequestHandler):
         params = parse_qs(raw)
         if path == '/generate':
             self.send_page(generate_script(params))
+        elif path == '/phaseb':
+            text = generate_script(params, phaseb_only=True)
+            data = text.encode('utf-8')
+            self.send_response(200)
+            self.send_header('Content-Type', 'text/plain; charset=utf-8')
+            self.send_header('Content-Length', str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
         elif path == '/build':
             job_id = uuid.uuid4().hex[:8]
             out_dir = os.path.join(OUTPUT_ROOT, job_id)
