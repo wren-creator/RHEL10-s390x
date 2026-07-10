@@ -1550,7 +1550,10 @@ PAGE = r"""<!DOCTYPE html>
 // Show output if server returned a script
 (function(){
   var el = document.getElementById('script-out');
-  if (el && el.textContent.trim() && el.textContent.trim() !== '__SCRIPT_PLACEHOLDER__') {
+  // Placeholder name split in two: send_page() text-replaces the marker
+  // everywhere it appears, and a literal match here would get the whole
+  // generated bash script injected into this string, breaking the parse.
+  if (el && el.textContent.trim() && el.textContent.trim() !== '__SCRIPT_' + 'PLACEHOLDER__') {
     document.getElementById('output-wrap').classList.add('visible');
     el.scrollIntoView({behavior:'smooth', block:'start'});
   }
@@ -1655,6 +1658,15 @@ async function runPreflight() {
 function toggleStatic(sel, id) {
   document.getElementById(id).style.display = (sel.value === 'static') ? '' : 'none';
 }
+
+// Sync every static-fields row to its select's CURRENT value on load.
+// Browsers restore form values across reloads — without this, a select
+// restored to "static" leaves its row hidden, and re-picking the same value
+// fires no change event, so the fields never appear.
+document.querySelectorAll('select[onchange^="toggleStatic"]').forEach(function(sel) {
+  var id = sel.getAttribute('onchange').match(/'([^']+)'/)[1];
+  toggleStatic(sel, id);
+});
 
 // Generate Script: fetch and show inline — no page reload (which would wipe
 // any build output on screen).
@@ -2575,9 +2587,12 @@ class Handler(BaseHTTPRequestHandler):
         print(f"  {self.address_string()} → {fmt % args}")
 
     def send_page(self, script_content=""):
+        # Replace only the first occurrence (the <pre> panel) — the marker
+        # must never be substituted anywhere else in the page.
         body = PAGE.replace(
             '__SCRIPT_PLACEHOLDER__',
-            html.escape(script_content) if script_content else '__SCRIPT_PLACEHOLDER__'
+            html.escape(script_content) if script_content else '__SCRIPT_PLACEHOLDER__',
+            1,
         )
         data = body.encode('utf-8')
         self.send_response(200)
