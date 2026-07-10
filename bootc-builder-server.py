@@ -1196,26 +1196,109 @@ PAGE = r"""<!DOCTYPE html>
       <span class="section-title">qeth Network</span>
       <span style="font-size:10px;color:var(--green-dim);margin-left:auto;letter-spacing:.08em;">IBM Z ONLY</span>
     </div>
-    <div class="section-body triple">
-      <div class="field">
-        <label>qeth base channel</label>
-        <input type="text" name="qeth_channel" value="0.0.0600"
-               pattern="[0-9a-fA-F]\.[0-9a-fA-F]\.[0-9a-fA-F]{4}"
-               placeholder="0.0.0600">
-        <span class="hint">Channels 0600, 0601, 0602 will be used</span>
+    <div class="section-body">
+      <div class="triple">
+        <div class="field">
+          <label>Interface 1 — qeth base channel</label>
+          <input type="text" name="qeth_channel" value="0.0.0600"
+                 pattern="[0-9a-fA-F]\.[0-9a-fA-F]\.[0-9a-fA-F]{4}"
+                 placeholder="0.0.0600">
+          <span class="hint">Read/write/data channels: base, +1, +2. This is the boot interface (zipl rd.net)</span>
+        </div>
+        <div class="field">
+          <label>Interface name</label>
+          <input type="text" name="iface" value="enc600" placeholder="enc600">
+          <span class="hint">NM connection interface-name</span>
+        </div>
+        <div class="field">
+          <label>IP configuration</label>
+          <select name="ip_method" onchange="toggleStatic(this,'s390-static1')">
+            <option value="dhcp">DHCP</option>
+            <option value="static">Static</option>
+          </select>
+        </div>
       </div>
-      <div class="field">
-        <label>Interface name</label>
-        <input type="text" name="iface" value="enc600"
-               placeholder="enc600">
-        <span class="hint">NM connection interface-name</span>
+      <div class="triple" id="s390-static1" style="display:none;">
+        <div class="field">
+          <label>Address (CIDR)</label>
+          <input type="text" name="ip_addr" placeholder="10.1.1.10/24">
+        </div>
+        <div class="field">
+          <label>Gateway</label>
+          <input type="text" name="gw" placeholder="10.1.1.1">
+        </div>
+        <div class="field">
+          <label>DNS servers</label>
+          <input type="text" name="dns" placeholder="10.1.1.53, 10.1.2.53">
+        </div>
       </div>
-      <div class="field">
-        <label>IP configuration</label>
-        <select name="ip_method">
-          <option value="dhcp">DHCP</option>
-          <option value="static">Static (edit script after)</option>
-        </select>
+      <div class="triple">
+        <div class="field">
+          <label>Interface 2 — qeth base channel (optional)</label>
+          <input type="text" name="qeth_channel2" value=""
+                 pattern="[0-9a-fA-F]\.[0-9a-fA-F]\.[0-9a-fA-F]{4}"
+                 placeholder="0.0.0610">
+          <span class="hint">Leave blank to skip</span>
+        </div>
+        <div class="field">
+          <label>Interface name</label>
+          <input type="text" name="iface2" placeholder="(derived from channel)">
+        </div>
+        <div class="field">
+          <label>IP configuration</label>
+          <select name="ip_method2" onchange="toggleStatic(this,'s390-static2')">
+            <option value="dhcp">DHCP</option>
+            <option value="static">Static</option>
+          </select>
+        </div>
+      </div>
+      <div class="triple" id="s390-static2" style="display:none;">
+        <div class="field">
+          <label>Address (CIDR)</label>
+          <input type="text" name="ip_addr2" placeholder="10.1.2.10/24">
+        </div>
+        <div class="field">
+          <label>Gateway</label>
+          <input type="text" name="gw2" placeholder="(optional)">
+        </div>
+        <div class="field">
+          <label>DNS servers</label>
+          <input type="text" name="dns2" placeholder="(optional)">
+        </div>
+      </div>
+      <div class="triple">
+        <div class="field">
+          <label>Interface 3 — qeth base channel (optional)</label>
+          <input type="text" name="qeth_channel3" value=""
+                 pattern="[0-9a-fA-F]\.[0-9a-fA-F]\.[0-9a-fA-F]{4}"
+                 placeholder="0.0.0620">
+          <span class="hint">Leave blank to skip</span>
+        </div>
+        <div class="field">
+          <label>Interface name</label>
+          <input type="text" name="iface3" placeholder="(derived from channel)">
+        </div>
+        <div class="field">
+          <label>IP configuration</label>
+          <select name="ip_method3" onchange="toggleStatic(this,'s390-static3')">
+            <option value="dhcp">DHCP</option>
+            <option value="static">Static</option>
+          </select>
+        </div>
+      </div>
+      <div class="triple" id="s390-static3" style="display:none;">
+        <div class="field">
+          <label>Address (CIDR)</label>
+          <input type="text" name="ip_addr3" placeholder="10.1.3.10/24">
+        </div>
+        <div class="field">
+          <label>Gateway</label>
+          <input type="text" name="gw3" placeholder="(optional)">
+        </div>
+        <div class="field">
+          <label>DNS servers</label>
+          <input type="text" name="dns3" placeholder="(optional)">
+        </div>
       </div>
     </div>
   </div>
@@ -1227,17 +1310,87 @@ PAGE = r"""<!DOCTYPE html>
       <span class="section-title">Network</span>
     </div>
     <div class="section-body">
-      <div class="field">
-        <label>Network interface name</label>
-        <input type="text" name="nic" value="eth0" placeholder="eth0">
-        <span class="hint">NM connection interface-name (e.g. eth0, ens3, enp0s3)</span>
+      <div class="triple">
+        <div class="field">
+          <label>Interface 1 — name</label>
+          <input type="text" name="nic" value="eth0" placeholder="eth0">
+          <span class="hint">NM connection interface-name (e.g. eth0, ens3, enp0s3)</span>
+        </div>
+        <div class="field">
+          <label>IP configuration</label>
+          <select name="ip_method_x86" onchange="toggleStatic(this,'x86-static1')">
+            <option value="dhcp">DHCP</option>
+            <option value="static">Static</option>
+          </select>
+        </div>
       </div>
-      <div class="field">
-        <label>IP configuration</label>
-        <select name="ip_method_x86">
-          <option value="dhcp">DHCP</option>
-          <option value="static">Static (edit script after)</option>
-        </select>
+      <div class="triple" id="x86-static1" style="display:none;">
+        <div class="field">
+          <label>Address (CIDR)</label>
+          <input type="text" name="ip_addr_x86" placeholder="10.1.1.10/24">
+        </div>
+        <div class="field">
+          <label>Gateway</label>
+          <input type="text" name="gw_x86" placeholder="10.1.1.1">
+        </div>
+        <div class="field">
+          <label>DNS servers</label>
+          <input type="text" name="dns_x86" placeholder="10.1.1.53, 10.1.2.53">
+        </div>
+      </div>
+      <div class="triple">
+        <div class="field">
+          <label>Interface 2 — name (optional)</label>
+          <input type="text" name="nic2" value="" placeholder="eth1 — leave blank to skip">
+        </div>
+        <div class="field">
+          <label>IP configuration</label>
+          <select name="ip_method_x86_2" onchange="toggleStatic(this,'x86-static2')">
+            <option value="dhcp">DHCP</option>
+            <option value="static">Static</option>
+          </select>
+        </div>
+      </div>
+      <div class="triple" id="x86-static2" style="display:none;">
+        <div class="field">
+          <label>Address (CIDR)</label>
+          <input type="text" name="ip_addr_x86_2" placeholder="10.1.2.10/24">
+        </div>
+        <div class="field">
+          <label>Gateway</label>
+          <input type="text" name="gw_x86_2" placeholder="(optional)">
+        </div>
+        <div class="field">
+          <label>DNS servers</label>
+          <input type="text" name="dns_x86_2" placeholder="(optional)">
+        </div>
+      </div>
+      <div class="triple">
+        <div class="field">
+          <label>Interface 3 — name (optional)</label>
+          <input type="text" name="nic3" value="" placeholder="eth2 — leave blank to skip">
+        </div>
+        <div class="field">
+          <label>IP configuration</label>
+          <select name="ip_method_x86_3" onchange="toggleStatic(this,'x86-static3')">
+            <option value="dhcp">DHCP</option>
+            <option value="static">Static</option>
+          </select>
+        </div>
+      </div>
+      <div class="triple" id="x86-static3" style="display:none;">
+        <div class="field">
+          <label>Address (CIDR)</label>
+          <input type="text" name="ip_addr_x86_3" placeholder="10.1.3.10/24">
+        </div>
+        <div class="field">
+          <label>Gateway</label>
+          <input type="text" name="gw_x86_3" placeholder="(optional)">
+        </div>
+        <div class="field">
+          <label>DNS servers</label>
+          <input type="text" name="dns_x86_3" placeholder="(optional)">
+        </div>
       </div>
     </div>
   </div>
@@ -1328,6 +1481,12 @@ PAGE = r"""<!DOCTYPE html>
   <div class="generate-wrap" style="gap:14px;">
     <button type="submit">&#x25B6;&nbsp; Generate Script</button>
     <button type="button" class="build-now" id="build-btn" onclick="buildNow()">⚙&nbsp; Build Image</button>
+  </div>
+  <div class="toggle-hint" style="text-align:center; margin-top:8px; line-height:1.6;">
+    <strong>Generate Script</strong> shows the standalone <code>build-and-deploy.sh</code>
+    for this configuration — copy it and run it yourself (e.g. in WSL or on another host).
+    <strong>Build Image</strong> runs those same steps right here and gives you the
+    download. Use one or the other.
   </div>
 
 </form>
@@ -1474,6 +1633,31 @@ async function runPreflight() {
   btn.textContent = '[ run checks ]';
   btn.disabled = false;
 }
+
+function toggleStatic(sel, id) {
+  document.getElementById(id).style.display = (sel.value === 'static') ? '' : 'none';
+}
+
+// Generate Script: fetch and show inline — no page reload (which would wipe
+// any build output on screen).
+document.getElementById('form').addEventListener('submit', async function(ev) {
+  ev.preventDefault();
+  var params = new URLSearchParams(new FormData(this)).toString();
+  var out = document.getElementById('script-out');
+  try {
+    var res = await fetch('/script', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/x-www-form-urlencoded'},
+      body: params,
+    });
+    out.textContent = await res.text();
+  } catch (e) {
+    out.textContent = '# Could not generate script: ' + e;
+  }
+  var wrap = document.getElementById('output-wrap');
+  wrap.classList.add('visible');
+  wrap.scrollIntoView({behavior: 'smooth', block: 'start'});
+});
 
 async function showPhaseB() {
   var el = document.getElementById('phaseb-out');
@@ -1807,17 +1991,86 @@ cp "{aux_dir}"/*.rpm "${{BUILD_CTX}}/rpms/aux/\""""
     dracut_lvm_line   = 'add_dracutmodules+=" lvm "'  if (is_s390x and data_dasd) else ''
     dracut_fips_line  = 'add_dracutmodules+=" fips "' if fips == "on" else ''
 
-    # ── Arch-specific: network ─────────────────────────────────────────────────
+    # ── Arch-specific: network (up to 3 interfaces) ───────────────────────────
+    # Each interface becomes its own .nmconnection. NM ipv4 methods are
+    # auto (DHCP) / manual (static) — "dhcp"/"static" are not valid values.
+    def _iface_cfg(name, method, addr, gw, dns, channel=None):
+        ipv4 = ['[ipv4]']
+        if method == 'static' and addr:
+            ipv4.append('method=manual')
+            ipv4.append(f'address1={addr}' + (f',{gw}' if gw else ''))
+            if dns:
+                dns_norm = ';'.join(s for s in
+                                    dns.replace(',', ' ').split() if s) + ';'
+                ipv4.append(f'dns={dns_norm}')
+        else:
+            ipv4.append('method=auto')
+        eth = ''
+        if channel:
+            # qeth needs its read/write/data subchannel triplet so NM can
+            # bring the device online without separate znet configuration.
+            try:
+                a, b, dev = channel.split('.')
+                base = int(dev, 16)
+                sub = ';'.join(f'{a}.{b}.{base + o:04x}' for o in range(3))
+                eth = f'\n[ethernet]\ns390-subchannels={sub}\ns390-nettype=qeth\n'
+            except ValueError:
+                eth = ''
+        return f"""[connection]
+id={name}
+type=ethernet
+interface-name={name}
+autoconnect=true
+{eth}
+{chr(10).join(ipv4)}
+
+[ipv6]
+method=ignore"""
+
+    def _qeth_name(channel):
+        try:
+            return f"enc{int(channel.split('.')[2], 16):x}"
+        except (ValueError, IndexError):
+            return f"enc{channel}"
+
+    net_ifaces = []   # (filename, content)
     if is_s390x:
-        net_filename = 'qeth0.nmconnection'
-        net_id       = 'qeth0'
-        net_iface    = iface
-        net_ipmethod = ip_method
+        for idx in ('', '2', '3'):
+            ch = p.get(f'qeth_channel{idx}',
+                       ['0.0.0600'] if idx == '' else [''])[0].strip()
+            if not ch:
+                continue
+            name = p.get(f'iface{idx}', [''])[0].strip() or _qeth_name(ch)
+            method = p.get(f'ip_method{idx}', ['dhcp'])[0].strip()
+            addr = p.get(f'ip_addr{idx}', [''])[0].strip()
+            gw   = p.get(f'gw{idx}',   [''])[0].strip()
+            dns  = p.get(f'dns{idx}',  [''])[0].strip()
+            net_ifaces.append((f'{name}.nmconnection',
+                               _iface_cfg(name, method, addr, gw, dns, channel=ch)))
     else:
-        net_filename = 'eth0.nmconnection'
-        net_id       = 'eth0'
-        net_iface    = nic
-        net_ipmethod = ip_method_x86
+        for idx in ('', '_2', '_3'):
+            name = p.get(f'nic{idx.replace("_", "")}',
+                         ['eth0'] if idx == '' else [''])[0].strip()
+            if not name:
+                continue
+            method = p.get(f'ip_method_x86{idx}', ['dhcp'])[0].strip()
+            addr = p.get(f'ip_addr_x86{idx}', [''])[0].strip()
+            gw   = p.get(f'gw_x86{idx}',   [''])[0].strip()
+            dns  = p.get(f'dns_x86{idx}',  [''])[0].strip()
+            net_ifaces.append((f'{name}.nmconnection',
+                               _iface_cfg(name, method, addr, gw, dns)))
+
+    net_write_steps = '\n\n'.join(
+        f"""log "Writing network/{fn}..."
+cat > "${{BUILD_CTX}}/network/{fn}" << 'EOF'
+{content}
+EOF
+chmod 600 "${{BUILD_CTX}}/network/{fn}\"""" for fn, content in net_ifaces)
+
+    net_cf_copies = '\n'.join(
+        f"COPY network/{fn} /etc/NetworkManager/system-connections/{fn}\n"
+        f"RUN chmod 600 /etc/NetworkManager/system-connections/{fn}"
+        for fn, _ in net_ifaces)
 
     # ── Arch-specific: bootloader / DASD files ─────────────────────────────────
     # The boot disk's partition/filesystem layout (and the root= it boots from)
@@ -2143,21 +2396,7 @@ hostonly="no"
 omit_drivers+=" floppy "
 EOF
 
-log "Writing network/{net_filename}..."
-cat > "${{BUILD_CTX}}/network/{net_filename}" << 'EOF'
-[connection]
-id={net_id}
-type=ethernet
-interface-name={net_iface}
-autoconnect=true
-
-[ipv4]
-method={net_ipmethod}
-
-[ipv6]
-method=ignore
-EOF
-chmod 600 "${{BUILD_CTX}}/network/{net_filename}"
+{net_write_steps}
 
 {rpm_cache_copy_step}
 
@@ -2219,8 +2458,7 @@ RUN chmod 600 /home/{admin_user}/.ssh/authorized_keys \\
 COPY dracut/bootc.conf /etc/dracut.conf.d/bootc.conf
 # (no baked /etc/fstab — the RAW's mounts are defined by bootc-image-builder;
 #  the optional data volume appends its own entry at first boot)
-COPY network/{net_filename} /etc/NetworkManager/system-connections/{net_filename}
-RUN chmod 600 /etc/NetworkManager/system-connections/{net_filename}
+{net_cf_copies}
 {dasd_cf_copy}
 {zipl_cf_copy}
 
@@ -2299,7 +2537,16 @@ class Handler(BaseHTTPRequestHandler):
         raw    = self.rfile.read(length).decode('utf-8')
         params = parse_qs(raw)
         if path == '/generate':
+            # No-JS fallback: full page render with the script embedded
             self.send_page(generate_script(params))
+        elif path == '/script':
+            text = generate_script(params)
+            data = text.encode('utf-8')
+            self.send_response(200)
+            self.send_header('Content-Type', 'text/plain; charset=utf-8')
+            self.send_header('Content-Length', str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
         elif path == '/phaseb':
             text = generate_script(params, phaseb_only=True)
             data = text.encode('utf-8')

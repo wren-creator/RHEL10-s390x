@@ -139,20 +139,26 @@ The admin password is set to `Ch@ngeMe1st!` and expires on first login. You will
 
 ### Section 03 · Network
 
-#### IBM Z — qeth Network
+Up to **three interfaces** per image. Interface 1 is required (on IBM Z it's the boot
+interface, wired into the zipl `rd.net=` parameter); interfaces 2 and 3 are optional —
+leave their channel/name blank to skip. Each configured interface gets its own
+`.nmconnection` baked into the image.
+
+#### IBM Z — qeth Network (per interface)
 
 | Field | Description |
 |---|---|
-| qeth base channel | Base CCW channel address (e.g. `0.0.0600`). Channels N, N+1, N+2 (0600, 0601, 0602) are used automatically. |
-| Interface name | Linux NM interface name (e.g. `enc600`). Must match what the kernel assigns to this qeth device. |
-| IP configuration | **DHCP** or **Static** (static means DHCP placeholder is written — edit the nmconnection after generation if needed). |
+| qeth base channel | Base CCW channel address (e.g. `0.0.0600`). The read/write/data triplet (N, N+1, N+2) is written into the profile as `s390-subchannels`, so NM brings the device online without separate znet config. |
+| Interface name | NM interface name (e.g. `enc600`). For interfaces 2–3, leave blank to derive it from the channel (`0.0.0610` → `enc610`). |
+| IP configuration | **DHCP** (`method=auto`) or **Static** (`method=manual`) — choosing Static reveals the address fields. |
+| Address (CIDR) / Gateway / DNS | Static only. Address in CIDR form (`10.1.1.10/24`); gateway and DNS optional; DNS accepts a comma- or space-separated list. |
 
-#### x86_64 / aarch64 — Network
+#### x86_64 / aarch64 — Network (per interface)
 
 | Field | Description |
 |---|---|
-| Network interface name | NM interface name (e.g. `eth0`, `ens3`, `enp0s3`). |
-| IP configuration | DHCP or Static. |
+| Interface name | NM interface name (e.g. `eth0`, `ens3`, `enp0s3`). Blank skips interfaces 2–3. |
+| IP configuration | DHCP or Static — Static reveals the same Address/Gateway/DNS fields as above. |
 
 ---
 
