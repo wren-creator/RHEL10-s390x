@@ -81,6 +81,10 @@ The base image contains the kernel, initrd, and bootloader components needed for
 
 ## 5. Containerfile
 
+> This is a reference example of what the Studio **generates** into its build
+> context (`/var/tmp/bootc-build-ctx`) — these files are not kept in the repo.
+> Use the Studio's *Generate Script* to produce the real thing for your config.
+
 ```dockerfile
 FROM registry.redhat.io/rhel10/rhel-bootc:latest
 
@@ -147,7 +151,7 @@ RUN dracut -f
 RUN bootc install-to-filesystem --rootfs /
 ```
 
-> **Note:** Change the default password `changeme` before production use, and replace the example SSH key in `ssh/authorized_keys` with your real public key.
+> **Note:** Change the default password `changeme` before production use, and set your real SSH public key (in the Studio form, or in the generated build context).
 
 ---
 

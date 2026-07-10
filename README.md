@@ -45,33 +45,22 @@ IBM Z host (DASD)   ←──────── dasdfmt / fdasd / dd / zipl  ◄
 
 ```
 .
-├── containerfile                          # Containerfile for the bootc image
-├── dracut/
-│   └── 10-s390x.conf                     # s390x driver config for initramfs
-├── network/
-│   └── qeth0.nmconnection                # NetworkManager qeth profile (enc600, DHCP)
-├── ssh/
-│   └── authorized_keys                   # SSH public key for britley — REPLACE BEFORE BUILDING
-├── zipl/
-│   └── zipl.conf                         # IBM Z bootloader config
-├── scripts/
-│   ├── firstboot-lvm.sh                  # First-boot DASD/LVM provisioning script
-│   ├── fetch-rpms.sh                     # Harvest s390x RPMs with your Red Hat account (no entitled host needed)
-│   └── package-list.s390x.txt            # Package set for the image + harvester
-├── systemd/
-│   └── firstboot-lvm.service             # Systemd unit for first-boot LVM setup
-├── dasd.conf                             # DASD device persistence config
-├── fstab                                 # Root filesystem mount config
 ├── bootc-builder-server.py               # Image Mode Studio web app (Phase A)
 ├── studio.sh                             # Start/stop the Studio (macOS/Linux)
 ├── studio.ps1                            # Start/stop the Studio (Windows)
-├── rpms/                                 # Drop local RPMs here (optional, can be empty)
+├── scripts/
+│   ├── fetch-rpms.sh                     # Harvest s390x RPMs with your Red Hat account (no entitled host needed)
+│   └── package-list.s390x.txt            # Package set for the image + harvester
 ├── aux-rpms/                             # Drop non-standard/3rd-party RPMs here — installed into the image via dnf (deps resolve from the harvested cache/CDN)
 ├── rpm-cache/                            # Created by fetch-rpms.sh — local dnf repo, auto-used by builds (git-ignored)
-├── RHEL10_bootc_s390x.md                 # General reference guide
-├── Deploy_Guide.md                       # LPAR deployment runbook
+├── Documentation/                        # Studio how-to, Windows runbook, Deploy Guide, general reference
 └── README.md
 ```
+
+Everything the image needs — Containerfile, dracut/network/zipl configs, dasd.conf,
+fstab, SSH key, first-boot LVM script + unit — is **generated per build** from your
+form choices (into `/var/tmp/bootc-build-ctx`), not kept as files in this repo. Use
+**Generate Script** in the Studio to see and keep the exact script for any configuration.
 
 ---
 
@@ -122,58 +111,26 @@ Then continue with **Phase B** ([`Deploy_Guide.md`](./Documentation/Deploy_Guide
 
 ---
 
-## Manual build (reference)
+## Building without the browser (Generate Script)
 
-### Prerequisites
-
-```bash
-sudo dnf -y install podman qemu-user-static
-sudo podman run --rm --privileged multiarch/qemu-user-static --reset -p yes
-podman login registry.redhat.io
-```
-
-### Before your first build
-
-1. **Replace the SSH key** — `ssh/authorized_keys` contains a placeholder. Add your real public key:
-   ```bash
-   cat ~/.ssh/id_ed25519.pub > ssh/authorized_keys
-   ```
-
-2. **Verify device addresses** — check that the DASD address and qeth channel in `dasd.conf`, `zipl/zipl.conf`, and `network/qeth0.nmconnection` match your actual LPAR configuration.
-
-3. **Change the default password** — the containerfile sets `test:changeme`. Update this before building for any non-test environment.
-
-### Build
-
-Use the Studio's **Generate Script** button to produce a `build-and-deploy.sh`
-tailored to your configuration, then run it:
+Every knob lives in the Studio form — SSH key, admin user + password, DASD/qeth
+addresses, storage layout, security posture. To run the build yourself instead of
+in-browser, click **Generate Script**: it produces a self-contained
+`build-and-deploy.sh` (build context, Containerfile, engine invocations, and the
+Phase B snippet, all inlined) for your exact configuration:
 
 ```bash
 chmod +x build-and-deploy.sh
 sudo ./build-and-deploy.sh
 ```
 
-Or manually:
+Prerequisites on the build host (the Studio's pre-flight checks these too):
 
 ```bash
-podman build \
-  --platform linux/s390x \
-  --tls-verify=false \
-  -t rhel10-bootc-s390x:latest \
-  -f containerfile \
-  .
-```
-
-### Create bootable disk image
-
-```bash
-podman run --rm -it --privileged \
-  -v /var/lib/containers:/var/lib/containers \
-  -v $(pwd)/output:/output \
-  registry.redhat.io/rhel10/bootc-image-builder:latest \
-  --type raw \
-  --target-arch s390x \
-  rhel10-bootc-s390x:latest
+sudo dnf -y install podman            # docker also works; podman still required for bootc-image-builder
+podman login registry.redhat.io
+# cross-builds only — one-time QEMU s390x emulation (or click Prepare Build Engine):
+sudo podman run --rm --privileged multiarch/qemu-user-static --reset -p yes
 ```
 
 ### Windows (Docker Desktop)

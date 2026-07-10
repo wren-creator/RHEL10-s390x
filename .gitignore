@@ -16,8 +16,5 @@ bootc-output/
 # redistribute via git)
 rpm-cache/
 
-# Hand-dropped RPMs for the manual build (keep the dir, not the packages)
-rpms/*.rpm
-
 # Auxiliary non-standard RPMs installed into the image (keep the dir only)
 aux-rpms/*.rpm
